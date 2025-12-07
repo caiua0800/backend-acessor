@@ -1,5 +1,6 @@
+// src/services/goalsService.ts
 import { pool } from "../db";
-import { parseMoney } from "./financeService"; // Reutilize o parseMoney se estiver exportado lá
+import { parseMoney } from "./financeService";
 
 // Interface para a criação de Meta
 interface GoalCreationData {
@@ -11,7 +12,7 @@ interface GoalCreationData {
   details_json?: object;
 }
 
-// Auxiliar para pegar o ID do usuário (reutilize de outro service se já tiver)
+// Auxiliar para pegar o ID do usuário
 const getUserId = async (whatsappId: string) => {
   const res = await pool.query("SELECT id FROM users WHERE phone_number = $1", [
     whatsappId,
@@ -20,26 +21,28 @@ const getUserId = async (whatsappId: string) => {
   return res.rows[0].id;
 };
 
-// Auxiliar para buscar a Meta pelo NOME
+// Auxiliar para buscar a Meta pelo NOME (USANDO ILIKE E WILDCARDS)
 const getGoalByName = async (userId: string, goalName: string) => {
-  // CORREÇÃO CRÍTICA: Adiciona % wildcards para busca parcial
-  const searchTerm = `%${goalName.trim()}%`; 
+  const searchTerm = `%${goalName.trim()}%`;
 
   const res = await pool.query(
-      // Busca a meta cujo nome CONTENHA o termo extraído pelo LLM.
-      // Ex: LLM manda 'Emagrecer', o DB busca por '%Emagrecer%' e encontra 'Emagrecer 9KG'.
-      "SELECT id FROM goals WHERE user_id = $1 AND goal_name ILIKE $2 ORDER BY LENGTH(goal_name) ASC",
-      [userId, searchTerm]
+    "SELECT id FROM goals WHERE user_id = $1 AND goal_name ILIKE $2 ORDER BY LENGTH(goal_name) ASC",
+    [userId, searchTerm]
   );
-  
-  // ORDENA POR LENGTH para tentar pegar a correspondência mais próxima (menor nome) primeiro,
-  // mas o principal é o ILIKE %.
 
   if (res.rows.length === 0) {
-      throw new Error(`Meta com o nome '${goalName}' não encontrada.`);
+    throw new Error(`Meta com o nome '${goalName}' não encontrada.`);
   }
-  // Retorna o ID da primeira meta encontrada
-  return res.rows[0].id; 
+  return res.rows[0].id;
+};
+
+// Auxiliar para buscar o histórico de progresso (para ser usado no listGoals)
+const getGoalProgressHistory = async (goalId: string) => {
+  const res = await pool.query(
+    "SELECT amount, description, created_at FROM goals_progress WHERE goal_id = $1 ORDER BY created_at DESC",
+    [goalId]
+  );
+  return res.rows;
 };
 
 // 1. goals_create
@@ -72,16 +75,16 @@ export const createGoal = async (
   return res.rows[0];
 };
 
-// 2. goals_update_progress (CORRIGIDA PARA USAR O NOME)
+// 2. goals_update_progress (CORRIGIDA PARA USAR O NOME E DESCRIÇÃO)
 export const updateGoalProgress = async (
   whatsappId: string,
-  goalName: string, // AGORA RECEBE O NOME
+  goalName: string,
   amount: any,
   description?: string,
   sourceTransactionId?: string
 ) => {
   const userId = await getUserId(whatsappId);
-  const goalId = await getGoalByName(userId, goalName); // BUSCA O ID PELO NOME
+  const goalId = await getGoalByName(userId, goalName);
 
   const progressAmount = parseMoney(amount);
 
@@ -90,6 +93,8 @@ export const updateGoalProgress = async (
   }
 
   const client = await pool.connect();
+  let updatedGoal = null;
+
   try {
     await client.query("BEGIN");
 
@@ -107,6 +112,7 @@ export const updateGoalProgress = async (
         "Meta não encontrada ou você não tem permissão para editá-la."
       );
     }
+    updatedGoal = updateRes.rows[0];
 
     // B. (Opcional) Registra o incremento na tabela goals_progress
     if (Math.abs(progressAmount) > 0) {
@@ -123,7 +129,12 @@ export const updateGoalProgress = async (
     }
 
     await client.query("COMMIT");
-    return updateRes.rows[0];
+
+    // CORREÇÃO: Retorna o objeto da meta atualizada mais a descrição da ação
+    return {
+      ...updatedGoal,
+      progress_description: description || "Progresso adicionado.",
+    };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -132,7 +143,7 @@ export const updateGoalProgress = async (
   }
 };
 
-// 3. goals_list
+// 3. goals_list (CORRIGIDO PARA INCLUIR HISTÓRICO)
 export const listGoals = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
 
@@ -145,42 +156,52 @@ export const listGoals = async (whatsappId: string) => {
     [userId]
   );
 
-  // Calcula o progresso em % para facilitar a leitura da IA
-  return res.rows.map((row) => ({
-    ...row,
-    target_amount: parseFloat(row.target_amount),
-    current_progress: parseFloat(row.current_progress),
-    progress_percent: (
-      (parseFloat(row.current_progress) / parseFloat(row.target_amount)) *
-      100
-    ).toFixed(2),
-    is_completed:
-      parseFloat(row.current_progress) >= parseFloat(row.target_amount),
-  }));
+  const goalsWithHistoryPromises = res.rows.map(async (row) => {
+    // Busca o histórico de progresso para CADA meta
+    const history = await getGoalProgressHistory(row.id);
+
+    return {
+      ...row,
+      target_amount: parseFloat(row.target_amount),
+      current_progress: parseFloat(row.current_progress),
+      progress_percent: (
+        (parseFloat(row.current_progress) / parseFloat(row.target_amount)) *
+        100
+      ).toFixed(2),
+      is_completed:
+        parseFloat(row.current_progress) >= parseFloat(row.target_amount),
+      progress_history: history, // <--- ADICIONA O HISTÓRICO AQUI
+    };
+  });
+
+  // Executa todas as buscas de histórico em paralelo
+  return Promise.all(goalsWithHistoryPromises);
 };
 
 // 4. goals_delete (CORRIGIDA PARA USAR O NOME)
-export const deleteGoalByName = async (whatsappId: string, goalName: string) => {
-    const userId = await getUserId(whatsappId);
-    const goalId = await getGoalByName(userId, goalName); // BUSCA O ID PELO NOME
+export const deleteGoalByName = async (
+  whatsappId: string,
+  goalName: string
+) => {
+  const userId = await getUserId(whatsappId);
+  const goalId = await getGoalByName(userId, goalName);
 
-    const res = await pool.query(
-        "DELETE FROM goals WHERE id = $1 AND user_id = $2 RETURNING id",
-        [goalId, userId]
-    );
+  const res = await pool.query(
+    "DELETE FROM goals WHERE id = $1 AND user_id = $2 RETURNING id",
+    [goalId, userId]
+  );
 
-    return (res.rowCount ?? 0) > 0;
+  return (res.rowCount ?? 0) > 0;
 };
 
 // 5. goals_update (para detalhes e nome) (ADICIONAR BUSCA PELO NOME)
 export const updateGoalDetails = async (
   whatsappId: string,
-  goalName: string, // AGORA RECEBE O NOME
+  goalName: string,
   data: Partial<GoalCreationData>
 ) => {
   const userId = await getUserId(whatsappId);
-  const goalId = await getGoalByName(userId, goalName); // BUSCA O ID PELO NOME
-
+  const goalId = await getGoalByName(userId, goalName);
 
   const fields = [];
   const values = [];
@@ -228,7 +249,6 @@ export const updateGoalDetails = async (
   return res.rows[0];
 };
 
-
 // 4. goals_delete
 export const deleteGoal = async (whatsappId: string, goalId: string) => {
   const userId = await getUserId(whatsappId);
@@ -238,6 +258,5 @@ export const deleteGoal = async (whatsappId: string, goalId: string) => {
     [goalId, userId]
   );
 
-  // CORREÇÃO TS18047 AQUI
   return (res.rowCount ?? 0) > 0;
 };

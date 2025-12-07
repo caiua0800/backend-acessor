@@ -1,4 +1,4 @@
-// src/services/orchestrationService.ts
+// src/services/orchestrationService.ts (AJUSTADO PARA JSON)
 
 import * as aiService from "./aiService";
 import { UserContext } from "./types";
@@ -16,32 +16,25 @@ import { gmailSpecialist } from "../specialists/gmailSpecialist";
 import { fileManagerSpecialist } from "../specialists/fileManagerSpecialist";
 
 // Mapeamento de keywords para as funções de especialista
-const specialistMap: Record<string, (context: UserContext) => Promise<string>> =
-  {
-    market: marketSpecialist,
-    ideas: ideasSpecialist,
-    calendar: calendarSpecialist,
-    goals: goalsSpecialist,
-    finance: financeSpecialist,
-    email: gmailSpecialist,
-    files: fileManagerSpecialist,
-  };
+const specialistMap: Record<string, (context: UserContext) => Promise<any>> = {
+  // Promise<any> pois retorna JSON
+  market: marketSpecialist,
+  ideas: ideasSpecialist,
+  calendar: calendarSpecialist,
+  goals: goalsSpecialist,
+  finance: financeSpecialist,
+  email: gmailSpecialist,
+  files: fileManagerSpecialist,
+};
 
 // =================================================================
-// 3. ESPECIALISTA DE CONVERSA GERAL
+// ESPECIALISTA DE CONVERSA GERAL (Permanece igual)
 // =================================================================
-
-/**
- * Especialista de Conversa Geral.
- * Usa o histórico de chat para manter a conversa.
- */
 export async function generalSpecialist(context: UserContext): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
 
-  // 1. CARREGA O HISTÓRICO DE CONVERSA DO DB
   const chatHistoryText = await memoryService.loadHistory(waId);
 
-  // 2. MONTA O PROMPT COMPLETO
   const systemMessage = `
         ===[SISTEMA: Data Atual: ${aiService.getSaoPauloTime()}]\n
         Você é um assistente pessoal. Sua identidade é:
@@ -51,8 +44,12 @@ export async function generalSpecialist(context: UserContext): Promise<string> {
         
         Você está conversando com ${userConfig.user_nickname}.
         
-        ### SUA MISSÃO ###
-        Sua missão é agir como um especialista em conversa geral. Sua única tarefa é conversar, entreter e ser um bom companheiro, mantendo sua personalidade. Você não tem ferramentas. Se o usuário pedir para fazer algo, diga a ele para pedir novamente de forma mais direta.
+        ### SUA MISSÃO CRÍTICA ###
+        Sua única tarefa é conversar e entreter.
+        
+        ### REGRA DE PROIBIÇÃO (MÁXIMA PRIORIDADE) ###
+        1. VOCÊ NÃO TEM FERRAMENTAS.
+        2. NUNCA mencione ter agendado, pausado, adicionado itens, etc.
         
         ### HISTÓRICO DE CONVERSA (PARA CONTEXTO) ###
         ${chatHistoryText}
@@ -61,13 +58,11 @@ export async function generalSpecialist(context: UserContext): Promise<string> {
     `;
 
   try {
-    // 3. CHAMA O LLM (USA O MODELO DE RACIOCÍNIO)
     const responseText = await aiService.generalCompletion(
       systemMessage,
       fullMessage
     );
 
-    // 4. SALVA A TROCA DE MENSAGENS NO HISTÓRICO
     await memoryService.saveToHistory(waId, fullMessage, responseText);
 
     return responseText;
@@ -85,13 +80,13 @@ export async function processAndOrchestrate(
 ): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
 
-  // 1. PASSO DE DISPATCH (Agente Despachante)
+  // 1. PASSO DE DISPATCH
   const keywords = await aiService.identifyTasks(fullMessage);
   console.log(
     `🤖 Agente Despachante identificou as tarefas: ${keywords.join(", ")}`
   );
 
-  // 2. CORREÇÃO: TRATAMENTO DA CONVERSA GERAL/VAZIO
+  // 2. TRATAMENTO DA CONVERSA GERAL
   const isGeneralConversation =
     keywords.includes("general") || keywords.length === 0;
 
@@ -99,46 +94,48 @@ export async function processAndOrchestrate(
     return generalSpecialist(context);
   }
 
-  // 3. PASSO DE ORQUESTRAÇÃO PARALELA (APENAS PARA TAREFAS ESPECÍFICAS)
+  // 3. PASSO DE ORQUESTRAÇÃO PARALELA
   const specialistPromises = keywords
-    .filter((k) => specialistMap[k]) // Filtra apenas as keywords que estão no nosso mapa
+    .filter((k) => specialistMap[k])
     .map((keyword) => specialistMap[keyword](context));
 
   if (specialistPromises.length === 0) {
     return generalSpecialist(context);
   }
 
-  // 4. SINCRONIZAÇÃO: Executa TUDO em paralelo e espera o resultado
-  const results: string[] = await Promise.all(specialistPromises);
+  // 4. SINCRONIZAÇÃO: Executa TUDO e coleta os JSONs Técnicos
+  const technicalResults: any[] = await Promise.all(specialistPromises);
 
-  // 5. LIMPEZA E TRATAMENTO DE ERRO/AUTENTICAÇÃO
-  const successResponses = results.filter((r) => r && r.startsWith("✅"));
-  const errorResponses = results.filter((r) => r && r.startsWith("❌"));
-  const criticalMessages = results.filter((r) =>
-    r.includes("*Parece que preciso da sua permissão")
+  // 5. COLETA DE ERROS CRÍTICOS E AUTENTICAÇÃO
+  const authError = technicalResults.find(
+    (res) => res.status === "FAILURE" && res.reason === "AUTH_REQUIRED"
+  );
+  const allFailures = technicalResults.filter(
+    (res) => res.status === "FAILURE"
   );
 
-  if (criticalMessages.length > 0) {
-    return criticalMessages.join("\n\n");
+  if (authError) {
+    // Assume que o erro de AUTH_REQUIRED já contém o link no 'detail'
+    return allFailures.map((f) => f.detail).join("\n\n");
   }
 
-  if (successResponses.length === 0) {
-    if (errorResponses.length > 0) {
-      const errorText = errorResponses
-        .map((e) => e.replace("❌ ", ""))
-        .join("\n\n");
-      return `*Desculpe, não consegui completar todas as tarefas:*\n${errorText}`;
+  // 6. TRATAMENTO DE FALHA
+  if (technicalResults.every((res) => res.status !== "SUCCESS")) {
+    // Se NENHUMA tarefa foi sucesso, resumimos os erros.
+    if (allFailures.length > 0) {
+      const errorDetails = allFailures.map((f) => f.detail).join("; ");
+      return `*Desculpe, não consegui completar as tarefas devido a um erro:* ${errorDetails}`;
     }
     return generalSpecialist(context);
   }
 
-  // 6. PASSO DE SUMARIZAÇÃO (Agente Resumidor)
-  const finalMessage = await aiService.summarizeResponses(
-    successResponses,
+  // 7. AGENTE DE FORMATAÇÃO (JSON -> VOZ FINAL)
+  const finalMessage = await aiService.formatFinalResponse(
+    technicalResults,
     userConfig
   );
 
-  // 7. SALVA A RESPOSTA FINAL NO HISTÓRICO
+  // 8. SALVA A RESPOSTA FINAL NO HISTÓRICO
   await memoryService.saveToHistory(waId, fullMessage, finalMessage);
 
   return finalMessage;

@@ -1,5 +1,5 @@
 // src/specialists/calendarSpecialist.ts
-import * as googleService from "../services/googleService"; // Importa a nova função deleteEventsByTerm
+import * as googleService from "../services/googleService";
 import * as aiService from "../services/aiService";
 import { UserContext } from "../services/types";
 
@@ -11,17 +11,14 @@ interface EventData {
   attendees?: string[];
   recurrence_freq?: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY" | "";
   recurrence_count?: number;
-
-  // CAMPOS PARA CANCELAMENTO (para a IA devolver)
-  event_id?: string; // Termo de busca para cancelar/deletar
+  event_id?: string;
   cancel?: boolean;
 }
 
 type EventList = EventData[];
 
-export async function calendarSpecialist(
-  context: UserContext
-): Promise<string> {
+export async function calendarSpecialist(context: UserContext): Promise<any> {
+  // RETORNA ANY (JSON)
   const { waId, fullMessage } = context;
 
   const extractionPrompt = `
@@ -29,12 +26,10 @@ export async function calendarSpecialist(
         Converta TODAS as datas/horas para o formato ISO 8601 (yyyy-MM-ddTHH:mm:ss-03:00) usando a DATA ATUAL fornecida.
         
         ### REGRAS CRÍTICAS ###
-        1. RECORRÊNCIA: Se for recorrência (Ex: "todos os dias"), use 'recurrence_freq' (DAILY, WEEKLY, etc.) e 'recurrence_count' (o número TOTAL de vezes).
+        1. RECORRÊNCIA: Use 'recurrence_freq' e 'recurrence_count'.
         2. CANCELAMENTO: Se a intenção for "cancelar", a ÚNICA CHAVE que o objeto deve ter é 'event_id' (com o termo de busca).
 
         Retorne APENAS um ARRAY JSON de objetos.
-        Exemplo (Agendamento): [ {"summary": "Reuniao", "start": "...", "end": "...", "recurrence_freq": "DAILY", "recurrence_count": 731} ]
-        Exemplo (Cancelamento): [ {"event_id": "Reuniao com Pedro"} ]
     `;
 
   try {
@@ -44,60 +39,89 @@ export async function calendarSpecialist(
     );
     const events: EventList = JSON.parse(jsonString);
 
-    if (!events || events.length === 0) return "";
+    if (!events || events.length === 0)
+      return { task: "calendar", status: "NOT_APPLICABLE" };
 
     // --- 1. DETECÇÃO DE CANCELAMENTO ---
     const firstItem = events[0];
     if (firstItem && (firstItem.event_id || firstItem.cancel)) {
       const searchTerm = firstItem.event_id as string;
 
-      // CHAMA A NOVA FUNÇÃO DE DELEÇÃO EM LOTE POR TERMO
       const deletedCount = await googleService.deleteEventsByTerm(
         waId,
         searchTerm
       );
 
       if (deletedCount > 0) {
-        return `✅ ${deletedCount} eventos com o termo: *${searchTerm}* foram cancelados com sucesso.`;
+        return {
+          task: "calendar",
+          status: "SUCCESS",
+          action: "delete",
+          deleted_count: deletedCount,
+          search_term: searchTerm,
+        };
       }
-      return `❌ Não encontrei nenhum evento para cancelar com o termo: *${searchTerm}*.`;
+      // Retorna falha específica
+      return {
+        task: "calendar",
+        status: "FAILURE",
+        action: "delete",
+        reason: `Nenhum evento encontrado com o termo: ${searchTerm}`,
+      };
     }
 
     // --- 2. EXECUÇÃO DO AGENDAMENTO (PARA CADA ITEM) ---
-    const successMessages: string[] = [];
+    const scheduledEvents = [];
+    let authRequired = false;
 
     for (const event of events) {
       if (!event.summary || !event.start || !event.end) continue;
 
-      const eventResult = await googleService.createEvent(waId, event);
-
-      const dateFormatted = new Date(event.start).toLocaleString("pt-BR", {
-        dateStyle: "short",
-        timeStyle: "short",
-      });
-      const recurrenceNote = event.recurrence_freq
-        ? ` (Repetição: *${event.recurrence_freq}*)`
-        : "";
-
-      successMessages.push(
-        `✅ Evento agendado! *${event.summary}* para ${dateFormatted}${recurrenceNote}.`
-      );
+      try {
+        const eventResult = await googleService.createEvent(waId, event);
+        scheduledEvents.push({
+          summary: event.summary,
+          start: event.start,
+          link: eventResult.link,
+        });
+      } catch (e) {
+        if ((e as any).message.includes("AUTH_REQUIRED")) {
+          authRequired = true;
+          break;
+        }
+        throw e; // Propaga outros erros
+      }
     }
 
-    if (successMessages.length === 0) {
-      return "❌ Não consegui agendar nenhum evento. Verifique os horários, datas e nomes.";
-    }
-
-    return successMessages.join("\n\n");
-  } catch (error) {
-    const typedError = error as any;
-
-    if (typedError.message && typedError.message.includes("AUTH_REQUIRED")) {
+    if (authRequired) {
       const authUrl = googleService.getAuthUrl(waId);
-      return `*Parece que preciso da sua permissão para acessar sua agenda do Google.* Por favor, clique no link abaixo para autorizar: ${authUrl}`;
+      return {
+        task: "calendar",
+        status: "FAILURE",
+        reason: "AUTH_REQUIRED",
+        detail: `*Parece que preciso da sua permissão para acessar sua agenda do Google.* Por favor, clique no link abaixo para autorizar: ${authUrl}`,
+      };
     }
 
-    console.error("Erro Crítico no Calendar Specialist:", typedError);
-    return "❌ Ocorreu um erro ao agendar o evento. Verifique a conexão com o Google ou se o formato da sua mensagem está correto.";
+    if (scheduledEvents.length === 0) {
+      return {
+        task: "calendar",
+        status: "FAILURE",
+        reason: "Nenhuma extração válida para agendamento.",
+      };
+    }
+
+    return {
+      task: "calendar",
+      status: "SUCCESS",
+      action: "schedule",
+      events: scheduledEvents,
+    };
+  } catch (error) {
+    return {
+      task: "calendar",
+      status: "FAILURE",
+      reason: (error as any).message,
+    };
   }
 }

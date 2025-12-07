@@ -1,4 +1,4 @@
-// src/specialists/goalsSpecialist.ts (CÓDIGO LIMPO E COMPLETO)
+// src/specialists/goalsSpecialist.ts
 import * as goalsService from "../services/goalsService";
 import * as aiService from "../services/aiService";
 import { UserContext } from "../services/types";
@@ -15,8 +15,7 @@ interface ProgressData {
   goal_name: string;
   amount: string;
   description?: string;
-} // <-- NOVO
-
+}
 interface DeleteData {
   goal_name: string;
   delete: boolean;
@@ -31,7 +30,7 @@ type GoalExtractionData =
   | DeleteData
   | ListData;
 
-export async function goalsSpecialist(context: UserContext): Promise<string> {
+export async function goalsSpecialist(context: UserContext): Promise<any> {
   const { waId, fullMessage } = context;
 
   // 1. TENTA EXTRAIR PROGRESSO
@@ -40,7 +39,8 @@ export async function goalsSpecialist(context: UserContext): Promise<string> {
         
         ### REGRA CRÍTICA ###
         1. O campo 'goal_name' DEVE conter APENAS a palavra-chave principal da meta (Ex: "Emagrecer").
-        2. O campo 'description' DEVE ser um resumo do que o usuário fez para atingir o progresso (Ex: "Fui à academia", "Caminhei 5km").
+        2. O campo 'description' DEVE ser um resumo do que o usuário fez para atingir o progresso (Ex: "Fui à academia", "Comi só salada").
+        3. IGNORE TODO O RUÍDO CONVERSACIONAL E NARRAÇÃO. FOCALIZE NA AÇÃO (verbo + número).
         
         Retorne APENAS o JSON no formato: {"goal_name": "Palavra Chave Principal", "amount": "Valor do Progresso", "description": "Resumo da Ação"}.
     `;
@@ -57,18 +57,27 @@ export async function goalsSpecialist(context: UserContext): Promise<string> {
         waId,
         progressData.goal_name,
         progressData.amount,
-        progressData.description // <--- PASSANDO A DESCRIÇÃO
+        progressData.description
       );
 
-      const progressFormatted =
-        updatedGoal.current_progress.toLocaleString("pt-BR");
-
-      return `✅ Progresso de *${progressData.amount}* adicionado à meta *${updatedGoal.goal_name}*! Progresso atual: ${progressFormatted}.`;
+      // Retorno Técnico de SUCESSO
+      return {
+        task: "goals",
+        status: "SUCCESS",
+        action: "progress_update",
+        goal_name: updatedGoal.goal_name,
+        new_progress: updatedGoal.current_progress,
+        progress_description: updatedGoal.progress_description,
+        progress_percent: updatedGoal.progress_percent,
+      };
     }
-  } catch (e) {
-    console.warn(
-      "Falha na extração/processamento de progresso, tentando próxima intenção..."
-    );
+  } catch (error) {
+    return {
+      task: "goals",
+      status: "FAILURE",
+      action: "progress_update",
+      reason: (error as any).message,
+    };
   }
 
   // 2. TENTA EXTRAIR OUTRAS AÇÕES (Excluir/Listar)
@@ -89,14 +98,14 @@ export async function goalsSpecialist(context: UserContext): Promise<string> {
     if ("list_all" in actionData && actionData.list_all) {
       const goals = await goalsService.listGoals(waId);
       if (goals.length === 0)
-        return "✅ Não há metas cadastradas. Bora começar uma!";
-      const listText = goals
-        .map(
-          (g) =>
-            `${g.goal_name}: ${g.current_progress}/${g.target_amount} (${g.progress_percent}%)`
-        )
-        .join("\n");
-      return `✅ Suas metas atuais são:\n${listText}`;
+        return {
+          task: "goals",
+          status: "SUCCESS",
+          action: "list",
+          message: "Nenhuma meta cadastrada.",
+        };
+
+      return { task: "goals", status: "SUCCESS", action: "list", goals: goals };
     }
     if ("delete" in actionData && actionData.delete && actionData.goal_name) {
       const deleted = await goalsService.deleteGoalByName(
@@ -104,13 +113,24 @@ export async function goalsSpecialist(context: UserContext): Promise<string> {
         actionData.goal_name
       );
       if (deleted)
-        return `✅ Meta *${actionData.goal_name}* excluída com sucesso!`;
+        return {
+          task: "goals",
+          status: "SUCCESS",
+          action: "delete",
+          goal_name: actionData.goal_name,
+        };
+
       throw new Error(
         `Meta com nome '${actionData.goal_name}' não encontrada para exclusão.`
       );
     }
-  } catch (e) {
-    console.warn("Falha na extração de ações, tentando criação de meta...");
+  } catch (error) {
+    return {
+      task: "goals",
+      status: "FAILURE",
+      action: "secondary_action",
+      reason: (error as any).message,
+    };
   }
 
   // 3. TENTA EXTRAIR CRIAÇÃO DE META (Ação Final)
@@ -126,18 +146,24 @@ export async function goalsSpecialist(context: UserContext): Promise<string> {
     );
     const goalData: GoalCreationData = JSON.parse(jsonString);
 
-    if (!goalData.goal_name || !goalData.target_amount) return "";
+    if (!goalData.goal_name || !goalData.target_amount)
+      return { task: "goals", status: "NOT_APPLICABLE" }; // Nenhuma intenção
 
     const newGoal = await goalsService.createGoal(waId, goalData);
-    const amountFormatted = newGoal.target_amount.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    });
 
-    return `✅ Meta *${newGoal.goal_name}* criada! Objetivo: ${amountFormatted}.`;
+    return {
+      task: "goals",
+      status: "SUCCESS",
+      action: "create",
+      goal_name: newGoal.goal_name,
+      target_amount: newGoal.target_amount,
+    };
   } catch (error) {
-    const typedError = error as any;
-    console.error("Erro no Goals Specialist (Criação):", typedError);
-    return `❌ Ocorreu um erro ao processar sua meta: ${typedError.message}`;
+    return {
+      task: "goals",
+      status: "FAILURE",
+      action: "create",
+      reason: (error as any).message,
+    };
   }
 }
