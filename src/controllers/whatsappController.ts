@@ -1,9 +1,11 @@
 import { Request, Response } from "express";
 import axios from "axios";
 import { transcribeAudio } from "../services/openaiService";
-import { downloadWhatsAppMedia } from "../services/whatsappService";
+import { downloadWhatsAppMedia } from "../services/whatsappService"; // Mantenha este import se for onde está o download
 import { cleanupFiles } from "../services/mediaService";
 import { pool } from "../db";
+import * as orchestrationService from '../services/orchestrationService';
+import * as whatsappService from "../services/whatsappService" // Supondo que sendTextMessage está aqui
 
 // --- FUNÇÃO DE NORMALIZAÇÃO DE TELEFONE ---
 const normalizePhoneNumber = (phone: string): string => {
@@ -11,7 +13,6 @@ const normalizePhoneNumber = (phone: string): string => {
   let cleanPhone = phone.replace(/\D/g, "");
 
   // Verifica se é um número de celular brasileiro (55 + DDD + Número) sem o 9º dígito
-  // 55 (País) + XX (DDD) + 8 dígitos = 12 caracteres
   if (cleanPhone.startsWith("55") && cleanPhone.length === 12) {
     const countryCode = cleanPhone.substring(0, 2);
     const areaCode = cleanPhone.substring(2, 4);
@@ -25,7 +26,7 @@ const normalizePhoneNumber = (phone: string): string => {
   return cleanPhone;
 };
 
-// --- O RESTO DO SEU CÓDIGO CONTINUA IGUAL, SÓ USAMOS A NOVA FUNÇÃO ---
+// --- INTERFACES PARA O BUFFER ---
 
 interface BufferedMessage {
   content: string;
@@ -40,57 +41,67 @@ interface UserBuffer {
 
 const messageBuffers: Record<string, UserBuffer> = {};
 
-const sendToN8N = async (waId: string) => {
+// --- ORQUESTRADOR LOCAL (SUBSTITUIU A CHAMADA AO N8N) ---
+const processAndRespond = async (waId: string) => {
   const buffer = messageBuffers[waId];
   if (!buffer || buffer.messages.length === 0) return;
 
+  // 1. MONTA A MENSAGEM FINAL E LIMPA O BUFFER
   buffer.messages.sort((a, b) => a.timestamp - b.timestamp);
-
-  const finalMessage = buffer.messages.map((m) => m.content).join(". ");
+  const fullMessage = buffer.messages.map((m) => m.content).join(". ");
   const userName = buffer.userName;
 
-  console.log(
-    `📤 Enviando buffer ordenado para n8n (${waId}): "${finalMessage}"`
-  );
-
+  console.log(`🧠 Processando mensagem final (${waId}): "${fullMessage}"`);
   delete messageBuffers[waId];
 
   try {
+    // 2. BUSCA CONFIGURAÇÕES DO USUÁRIO
     const userRes = await pool.query(
       `SELECT u.id, u.full_name, uc.* 
          FROM users u
          LEFT JOIN user_configs uc ON u.id = uc.user_id
          WHERE u.phone_number = $1`,
-      [waId] // waId aqui já está normalizado
+      [waId]
     );
 
-    let userConfig = {};
-    if (userRes.rows.length > 0) {
-      userConfig = userRes.rows[0];
-    }
-
-    const n8nUrl = process.env.N8N_WEBHOOK_URL;
-    if (!n8nUrl) {
-      console.error("❌ N8N_WEBHOOK_URL não definido no .env");
-      return;
-    }
-
-    const payload = {
-      wa_id: waId,
-      user_name: userName,
-      user_message: finalMessage,
-      timestamp: Date.now(),
-      config: userConfig,
+    // Cria o objeto UserConfig para o Orquestrador
+    // Se não achar, usa um objeto vazio/default
+    const userConfig = userRes.rows.length > 0 ? userRes.rows[0] : {
+      agent_nickname: "Acessor",
+      agent_gender: "Masculino",
+      agent_personality: ["Amigo", "Eficiente"],
+      user_nickname: userName,
+      full_name: userName,
     };
 
-    await axios.post(n8nUrl, payload);
+    const context = { 
+        waId, 
+        fullMessage, 
+        userName, 
+        userConfig 
+    };
+    
+    // 3. ORQUESTRAÇÃO LOCAL
+    const finalResponse = await orchestrationService.processAndOrchestrate(context);
+    
+    // 4. ENVIA A RESPOSTA 
+    // OBS: O whatsappService.sendTextMessage deve existir e estar implementado
+    await whatsappService.sendTextMessage(waId, finalResponse); 
+
+    console.log(`✅ Resposta final enviada para ${waId}.`);
+
   } catch (error: any) {
-    console.error("❌ Erro ao enviar para n8n:", error.message);
+    console.error("❌ Erro no processamento e orquestração:", error.message);
+    // Tenta enviar uma mensagem de erro ao usuário
+    try {
+        await whatsappService.sendTextMessage(waId, "*Desculpe*, houve um erro grave na nossa central. Tente novamente mais tarde."); 
+    } catch (e) {}
   }
 };
 
+// --- ROTAS DO EXPRESS ---
+
 export const verifyWebhook = (req: Request, res: Response) => {
-  // ... (código igual)
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -106,6 +117,7 @@ export const verifyWebhook = (req: Request, res: Response) => {
 };
 
 export const processWebhook = async (req: Request, res: Response) => {
+  // Responde imediatamente ao WhatsApp para evitar timeouts
   res.sendStatus(200);
 
   try {
@@ -121,29 +133,34 @@ export const processWebhook = async (req: Request, res: Response) => {
       const message = body.entry[0].changes[0].value.messages[0];
       const contact = body.entry[0].changes[0].value.contacts[0];
 
-      // --- AQUI A MÁGICA ACONTECE ---
+      // Normaliza o ID para busca e processamento
       const originalWaId = contact.wa_id;
-      const waId = normalizePhoneNumber(originalWaId); // Normaliza o número
-      // ---------------------------------
+      const waId = normalizePhoneNumber(originalWaId); 
 
       const name = contact.profile.name;
       const type = message.type;
       const messageTimestamp = parseInt(message.timestamp);
 
       let textContent = "";
+      let filesToCleanup: string[] = [];
 
+      // 1. Processa Áudio/Texto
       if (type === "text") {
         textContent = message.text.body;
       } else if (type === "audio") {
         console.log("🎤 Áudio recebido. Transcrevendo...");
         const audioPath = await downloadWhatsAppMedia(message.audio.url);
+        filesToCleanup.push(audioPath); // Adiciona para limpar
         textContent = await transcribeAudio(audioPath);
-        cleanupFiles([audioPath]);
         console.log(`📝 Transcrição: ${textContent}`);
       }
 
-      if (!textContent) return;
+      if (!textContent) {
+        cleanupFiles(filesToCleanup);
+        return;
+      }
 
+      // 2. Lógica do Buffer (Agrupamento de Mensagens)
       if (!messageBuffers[waId]) {
         messageBuffers[waId] = { timer: null, messages: [], userName: name };
       }
@@ -157,9 +174,14 @@ export const processWebhook = async (req: Request, res: Response) => {
         clearTimeout(messageBuffers[waId].timer!);
       }
 
-      console.log(`⏳ Mensagem adicionada. Timer resetado (6s).`);
+      // Limpa os arquivos temporários do áudio
+      if (filesToCleanup.length > 0) {
+        cleanupFiles(filesToCleanup); 
+      }
+
+      console.log(`⏳ Mensagem adicionada. Timer resetado (1s).`);
       messageBuffers[waId].timer = setTimeout(() => {
-        sendToN8N(waId); // O waId enviado já está corrigido
+        processAndRespond(waId); 
       }, 1000);
     }
   } catch (error: any) {

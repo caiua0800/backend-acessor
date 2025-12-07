@@ -1,3 +1,4 @@
+// server.ts
 import "dotenv/config"; // Garante que .env carregue primeiro
 import express from "express";
 import cors from "cors";
@@ -19,6 +20,9 @@ import docsRoutes from "./routes/docsRoutes";
 import sheetsRoutes from "./routes/sheetsRoutes";
 import driveRoutes from "./routes/driveRoutes";
 
+// CORREÇÃO: Importa a função de setup de memória
+import { setupMemoryTable } from "./services/memoryService";
+
 
 const app = express();
 app.use(cors({
@@ -28,7 +32,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+// O código de criação de pasta de uploads foi movido para o bloco de inicialização.
 
 app.use("/auth", authRoutes);
 app.use("/calendar", calendarRoutes);
@@ -45,6 +49,19 @@ app.use('/docs', docsRoutes);
 app.use('/sheets', sheetsRoutes);
 app.use('/drive', driveRoutes);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor refatorado rodando na porta ${PORT}`);
-});
+// Função principal de inicialização
+async function startServer() {
+  // CRIAÇÃO DA PASTA DE UPLOADS (CÓDIGO ORIGINAL SEU)
+  if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+  
+  // CORREÇÃO CRÍTICA: GARANTE QUE A TABELA DE MEMÓRIA EXISTA ANTES DE TUDO
+  await setupMemoryTable(); 
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Servidor refatorado rodando na porta ${PORT}`);
+    console.log(`✅ Memória de chat configurada e pronta.`);
+  });
+}
+
+// Chama a função de inicialização
+startServer();

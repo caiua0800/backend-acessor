@@ -152,7 +152,7 @@ export const addTransaction = async (whatsappId: string, data: any) => {
 
     return `Feito! Valor: ${amountVal}. Saldo anterior: ${beforeAmount.toFixed(
       2
-    )}. Novo saldo: ${afterAmount.toFixed(2)}.`;
+    )}. Novo saldo: ${afterAmount.toFixed(2)}.`
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;

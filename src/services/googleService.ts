@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import { pool } from "../db";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
+const TIME_ZONE = "America/Sao_Paulo";
 
 // --- CONFIGURAÇÃO DO CLIENTE OAUTH2 ---
 const createOAuthClient = () => {
@@ -388,8 +389,12 @@ export const createEvent = async (
     start: string;
     end: string;
     attendees?: string[];
+    // NOVO: Campos simples de recorrência
+    recurrence_freq?: string;
+    recurrence_count?: number;
   }
 ) => {
+  // Chamada de autenticação (mantendo o helper)
   const auth = await getAuthenticatedClient(whatsappId);
   const calendar = google.calendar({ version: "v3", auth });
 
@@ -403,9 +408,30 @@ export const createEvent = async (
   let requestBody: any = {
     summary: eventDetails.summary,
     description: eventDetails.description,
-    start: { dateTime: eventDetails.start },
-    end: { dateTime: eventDetails.end },
+    start: {
+      dateTime: eventDetails.start,
+      timeZone: TIME_ZONE, // <--- OBRIGATÓRIO PARA RECORRÊNCIA
+    },
+    end: {
+      dateTime: eventDetails.end,
+      timeZone: TIME_ZONE, // <--- OBRIGATÓRIO PARA RECORRÊNCIA
+    },
   };
+
+  // --- CORREÇÃO CRÍTICA: CONSTRUÇÃO SEGURA DA RRULE ---
+  if (eventDetails.recurrence_freq) {
+    const freq = eventDetails.recurrence_freq.toUpperCase();
+    // Garante que o COUNT seja um número e que, se não fornecido, seja 365 (1 ano)
+    const count =
+      eventDetails.recurrence_count &&
+      !isNaN(Number(eventDetails.recurrence_count))
+        ? Number(eventDetails.recurrence_count)
+        : 365;
+
+    // Constrói a RRULE de forma segura para o Google Calendar
+    requestBody.recurrence = [`RRULE:FREQ=${freq};COUNT=${count}`];
+  }
+  // ---------------------------------------------
 
   if (hasAttendees) {
     requestBody.attendees = attendeesList;
@@ -429,6 +455,39 @@ export const createEvent = async (
     meetLink: event.data.hangoutLink || null,
   };
 };
+
+export const deleteEventsByTerm = async (whatsappId: string, searchTerm: string): Promise<number> => {
+  const auth = await getAuthenticatedClient(whatsappId);
+  const calendar = google.calendar({ version: "v3", auth });
+  
+  // 1. LISTA EVENTOS QUE CORRESPONDEM AO TERMO DE BUSCA
+  const listRes = await calendar.events.list({
+      calendarId: 'primary',
+      q: searchTerm, // Usa o termo para filtrar
+      singleEvents: true,
+      timeMin: (new Date()).toISOString(), // A partir de agora
+      maxResults: 100 // Limita para não deletar milhares
+  });
+  
+  const eventsToDelete = listRes.data.items || [];
+
+  if (eventsToDelete.length === 0) {
+      return 0;
+  }
+  
+  // 2. CRIA PROMISES DE DELEÇÃO PARA CADA EVENTO ENCONTRADO
+  const deletePromises = eventsToDelete.map(event => {
+      return calendar.events.delete({
+          calendarId: 'primary',
+          eventId: event.id!
+      });
+  });
+  
+  // 3. EXECUTA TODAS AS DELEÇÕES EM PARALELO
+  await Promise.all(deletePromises);
+  
+  return eventsToDelete.length;
+}; 
 
 export const deleteEvent = async (whatsappId: string, eventId: string) => {
   const auth = await getAuthenticatedClient(whatsappId);

@@ -11,20 +11,21 @@ const getUserId = async (whatsappId: string) => {
 };
 
 const addSingleItem = async (client: any, userId: string, itemName: string, quantity: number = 1) => {
-    const normalizedItemName = itemName.trim().toLowerCase();
-    
-    // Agora usa o 'client' da transação, em vez de 'pool'
-    return client.query(
-        `INSERT INTO market_list_items (user_id, item_name, quantity)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, item_name) 
-         DO UPDATE SET 
-            quantity = market_list_items.quantity + $3,
-            checked = FALSE,
-            updated_at = NOW()
-         RETURNING item_name, quantity`,
-        [userId, normalizedItemName, quantity]
-    );
+  const normalizedItemName = itemName.trim().toLowerCase();
+  
+  const res = await client.query( // <--- ADICIONAMOS O AWAIT AQUI
+      `INSERT INTO market_list_items (user_id, item_name, quantity)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, item_name) 
+       DO UPDATE SET 
+          quantity = market_list_items.quantity + $3,
+          checked = FALSE,
+          updated_at = NOW()
+       RETURNING item_name, quantity`,
+      [userId, normalizedItemName, quantity]
+  );
+
+  return res.rows[0]; // <--- RETORNA APENAS O ITEM ADICIONADO
 };
 
 // Edita a quantidade de um item específico
@@ -83,28 +84,27 @@ export const getList = async (whatsappId: string) => {
 };
 
 export const addMultipleItemsToList = async (whatsappId: string, items: { itemName: string, quantity: number }[]) => {
-    const userId = await getUserId(whatsappId);
-    
-    // Inicia uma transação para garantir que todos os itens sejam adicionados ou nenhum
-    const client = await pool.connect();
-    
-    try {
-        await client.query('BEGIN');
+  const userId = await getUserId(whatsappId);
+  
+  const client = await pool.connect();
+  
+  try {
+      await client.query('BEGIN');
 
-        const results = [];
-        // Loop para adicionar cada item usando a função interna
-        for (const item of items) {
-            const res = await addSingleItem(client, userId, item.itemName, item.quantity);
-            results.push(res.rows[0]);
-        }
+      const results = [];
+      for (const item of items) {
+          // Agora 'itemResult' JÁ É o objeto { item_name, quantity }
+          const itemResult = await addSingleItem(client, userId, item.itemName, item.quantity);
+          results.push(itemResult); // <--- APENAS DA O PUSH NO ITEM
+      }
 
-        await client.query('COMMIT');
-        return results; // Retorna a lista de itens que foram adicionados/atualizados
+      await client.query('COMMIT');
+      return results as { item_name: string, quantity: number }[]; 
 
-    } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-    } finally {
-        client.release();
-    }
+  } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+  } finally {
+      client.release();
+  }
 };
