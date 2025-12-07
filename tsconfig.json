@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    /* Configurações Básicas */
+    "target": "es2016",                                  /* Versão do JavaScript gerado */
+    "module": "commonjs",                                /* O padrão do Node.js */
+    "rootDir": "./src",                                  /* Onde está seu código */
+    "outDir": "./dist",                                  /* Onde vai o código compilado */
+    "esModuleInterop": true,                             /* Permite importar pacotes CommonJS como se fossem ES Modules */
+    "forceConsistentCasingInFileNames": true,            /* Garante consistência nos nomes de arquivo */
+    "strict": true,                                      /* Ativa verificações rigorosas de tipo */
+    "skipLibCheck": true,                                /* Pula verificação de arquivos de definição (.d.ts) para ser mais rápido */
+    
+    /* A CORREÇÃO DO SEU ERRO ESTÁ AQUI: */
+    "verbatimModuleSyntax": false                        
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
