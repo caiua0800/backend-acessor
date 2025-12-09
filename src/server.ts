@@ -75,6 +75,9 @@ async function startServer() {
   if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 
   await setupMemoryTable();
+  console.log("✅ Memória de chat configurada e pronta."); // Log para ver se chegou aqui
+
+  await setupMemoryTable();
 
   cron.schedule("* * * * *", async () => {
     // console.log("⏰ Cron tick..."); // Descomente para debug
@@ -89,4 +92,11 @@ async function startServer() {
   });
 }
 
-startServer();
+(async () => {
+  try {
+      await startServer();
+  } catch (e) {
+      console.error("💥 ERRO FATAL AO INICIAR SERVIDOR:", e);
+      process.exit(1); // Força a saída para o erro ser reportado
+  }
+})();
