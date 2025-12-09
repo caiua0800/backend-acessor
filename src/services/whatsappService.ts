@@ -5,7 +5,7 @@ import FormData from "form-data";
 import { v4 as uuidv4 } from "uuid";
 import * as elevenLabsService from "./elevenLabsService";
 import * as aiService from "./aiService";
-import ffmpeg from "fluent-ffmpeg";
+// import ffmpeg from "fluent-ffmpeg"; // FFmpeg não é mais necessário aqui
 
 const WHATSAPP_API_URL =
   process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
@@ -14,25 +14,7 @@ const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const DEFAULT_VOICE_ID = process.env.DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
 // --- FUNÇÃO AUXILIAR: CONVERTER MP3/MPEG PARA OGG OPUS ---
-const convertAudioToOggOpus = (inputPath: string): Promise<string> => {
-  const outputPath = path.join("uploads", `${uuidv4()}.ogg`);
-
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .toFormat("ogg")
-      .audioCodec("libopus") // Codec Opus (CRÍTICO para áudio de voz)
-      .on("error", (err) => {
-        console.error("❌ FFmpeg Erro na Transcodificação:", err.message);
-        reject(new Error("FFmpeg falhou ao converter áudio."));
-      })
-      .on("end", () => {
-        // Limpa o arquivo MP3 original antes de resolver
-        fs.unlinkSync(inputPath);
-        resolve(outputPath);
-      })
-      .save(outputPath);
-  });
-};
+// REMOVIDA: Não precisamos mais de transcodificação se o ElevenLabs retornar OGG/Opus.
 
 // --- FUNÇÃO AUXILIAR PARA ENVIAR ÁUDIO (USANDO OGG/OPUS) ---
 const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
@@ -109,14 +91,13 @@ export const sendTextMessage = async (
       const speechText = await aiService.normalizeForSpeech(messageText);
       const voiceId = options?.userConfig?.agent_voice_id || DEFAULT_VOICE_ID;
 
-      const mp3Path = await elevenLabsService.generateAudio(
+      // Chama a função que agora retorna OGG/Opus
+      const oggPath = await elevenLabsService.generateAudio(
         speechText,
         voiceId
       );
 
-      // Transcodifica (Ogg Opus)
-      const oggPath = await convertAudioToOggOpus(mp3Path);
-
+      // Apenas envia o arquivo OGG/Opus diretamente
       await sendAudioMessage(recipientWaId, oggPath);
     } else {
       // --- ENVIO PADRÃO DE TEXTO ---
@@ -144,12 +125,9 @@ export const sendTextMessage = async (
       "Erro ao enviar mensagem:",
       error.response?.data || error.message
     );
-    // Fallback: Se der erro no áudio, tenta mandar texto
-    if (
-      error.message.includes("FFmpeg falhou") ||
-      error.message.includes("ElevenLabs")
-    ) {
-      console.log("⚠️ Fallback: Enviando texto devido a erro no áúdio.");
+    // O Fallback agora só precisa checar se houve erro no ElevenLabs
+    if (error.message.includes("Falha ao gerar áudio.")) {
+      console.log("⚠️ Fallback: Enviando texto devido a erro na API de áudio.");
       // Chama recursivo sem options para forçar o envio de texto
       await sendTextMessage(recipientWaId, messageText);
     }
