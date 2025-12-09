@@ -13,9 +13,6 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const DEFAULT_VOICE_ID = process.env.DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
-// --- FUNÇÃO AUXILIAR: CONVERTER MP3/MPEG PARA OGG OPUS ---
-// REMOVIDA: Não precisamos mais de transcodificação se o ElevenLabs retornar OGG/Opus.
-
 // --- FUNÇÃO AUXILIAR PARA ENVIAR ÁUDIO (USANDO OGG/OPUS) ---
 const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
   const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/media`;
@@ -25,8 +22,12 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
   form.append("type", "audio/ogg");
   form.append("messaging_product", "whatsapp");
 
+  let mediaId: string | null = null;
+  const messageUrl = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+
   try {
     // 1. Upload do arquivo
+    console.log(`📡 [Upload] Tentando upload do arquivo: ${filePath}`);
     const uploadRes = await axios.post(url, form, {
       headers: {
         Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -34,11 +35,17 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
       },
     });
 
-    const mediaId = uploadRes.data.id;
+    mediaId = uploadRes.data.id;
+    console.log(`✅ [Upload] Sucesso. Media ID obtido: ${mediaId}`);
+    
+    if (!mediaId) {
+        throw new Error("O upload foi bem-sucedido, mas o media ID não foi retornado.");
+    }
 
     // 2. Envio da mensagem de áudio (Referenciando o ID)
+    console.log(`✉️ [Envio] Tentando enviar mensagem com Media ID: ${mediaId}`);
     await axios.post(
-      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+      messageUrl,
       {
         messaging_product: "whatsapp",
         to: recipientWaId,
@@ -47,9 +54,27 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
       },
       { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
     );
+    console.log(`🎉 [Envio] Mensagem de áudio enviada com sucesso para ${recipientWaId}.`);
+
+  } catch (error: any) {
+    // Captura erros de rede ou de resposta da API
+    if (error.response) {
+      console.error(`❌ [ERRO WHATSAPP] Status: ${error.response.status}`);
+      console.error(`❌ [ERRO WHATSAPP] Data:`, error.response.data);
+      console.error(`❌ [ERRO WHATSAPP] Endpoint: ${mediaId ? 'Mensagem' : 'Upload'}`);
+    } else {
+      console.error("❌ [ERRO GERAL] Falha na requisição Axios:", error.message);
+    }
+    // Rejoga o erro para que a função sendTextMessage possa fazer o fallback
+    throw new Error(`Falha no envio do áudio (Media ID: ${mediaId}): ${error.message}`);
+
   } finally {
     // Limpeza (sempre garantir que o arquivo no servidor seja deletado)
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🧹 Arquivo temporário deletado: ${filePath}`);
+    }
+    // Se o upload foi feito, mas o envio falhou, o mediaId será limpo pelo WhatsApp
   }
 };
 
