@@ -97,6 +97,35 @@ export const listTransactions = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const searchTransactions = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    
+    // Parâmetros de paginação
+    const page = parseInt(req.query.page as string || '1');
+    const limit = parseInt(req.query.limit as string || '20');
+    const offset = (page - 1) * limit;
+    
+    // Parâmetros de filtro
+    const categoryFilter = req.query.category as string | undefined;
+    const descriptionFilter = req.query.description as string | undefined;
+
+    if (limit > 100) return res.status(400).json({ error: "Limite máximo de 100 itens por página." });
+
+    const result = await financeService.searchTransactionsByUserId(
+      userId,
+      limit,
+      offset,
+      categoryFilter,
+      descriptionFilter
+    );
+
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
 // GET /finance/investments (Para listar investimentos)
 export const getInvestments = async (req: AuthRequest, res: Response) => {
   try {

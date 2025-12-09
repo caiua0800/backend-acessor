@@ -469,3 +469,77 @@ export const addRecurringTransaction = async (whatsappId: string, data: any) => 
   const userId = await getUserId(whatsappId);
   return addRecurringTransactionByUserId(userId, data);
 };
+
+export const searchTransactionsByUserId = async (
+  userId: string,
+  limit: number,
+  offset: number,
+  categoryFilter?: string,
+  descriptionFilter?: string
+) => {
+  // Queries base
+  let countQuery = `SELECT COUNT(*) FROM transactions WHERE user_id = $1`;
+  let dataQuery = `SELECT id, amount, type, category, description, transaction_date FROM transactions WHERE user_id = $1`;
+  
+  const baseParams = [userId];
+  let filterIndex = 2; // O primeiro parâmetro ($1) é sempre o userId
+  
+  // 1. Constrói a cláusula WHERE para filtros
+  const whereClauses = [];
+  
+  if (categoryFilter) {
+    whereClauses.push(`category = $${filterIndex++}`);
+    baseParams.push(categoryFilter);
+  }
+  
+  if (descriptionFilter) {
+    // unaccent(): Remove acentos (requer a extensão unaccent no seu DB)
+    // LOWER() e ILIKE: Garantem que a comparação seja case-insensitive.
+    whereClauses.push(`unaccent(LOWER(description)) ILIKE unaccent(LOWER($${filterIndex++}))`);
+    baseParams.push(`%${descriptionFilter}%`);
+  }
+
+  if (whereClauses.length > 0) {
+    const whereCondition = whereClauses.join(' AND ');
+    countQuery += ` AND ${whereCondition}`;
+    dataQuery += ` AND ${whereCondition}`;
+  }
+  
+  // 2. Query para o total count (usa os mesmos parâmetros de filtro)
+  const totalCountRes = await pool.query(countQuery, baseParams);
+  const totalCount = parseInt(totalCountRes.rows[0].count, 10);
+  
+  // 3. Query para todas as categorias (para o filtro do frontend)
+  const categoryRes = await pool.query(
+    "SELECT DISTINCT category FROM transactions WHERE user_id = $1 AND category IS NOT NULL ORDER BY category ASC",
+    [userId]
+  );
+  const categories = categoryRes.rows.map(row => row.category);
+
+  // 4. Query para os dados paginados
+  const dataParams = [...baseParams];
+  // Adiciona ORDER BY, LIMIT e OFFSET no final
+  dataQuery += ` ORDER BY transaction_date DESC LIMIT $${filterIndex++} OFFSET $${filterIndex++}`;
+  
+  dataParams.push(limit.toString());
+  dataParams.push(offset.toString());
+  
+  const dataRes = await pool.query(dataQuery, dataParams);
+  
+  const transactions = dataRes.rows.map(row => ({
+    id: row.id,
+    amount: parseFloat(row.amount),
+    type: row.type,
+    category: row.category,
+    description: row.description,
+    date: row.transaction_date,
+  }));
+  
+  return {
+    transactions,
+    total: totalCount,
+    categories,
+    page: offset / limit + 1,
+    limit: limit
+  };
+};

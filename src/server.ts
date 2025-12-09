@@ -27,7 +27,7 @@ import { setupMemoryTable } from "./services/memoryService";
 import { processNotificationQueue } from "./services/notificationService";
 import todoRoutes from "./routes/todoRoutes";
 import vaultRoutes from "./routes/vaultRoutes";
-import { processDailyRecurringTransactions } from "./services/financeService";
+import { processDailyRecurringTransactions } from "./services/financeService"; // Import já existente
 
 const app = express();
 
@@ -78,22 +78,43 @@ async function initializeServices() {
     await setupMemoryTable();
     console.log("✅ Memória de chat configurada e pronta.");
 
+    // --- EXECUÇÃO IMEDIATA (GARANTIA DE NÃO PERDA DE EVENTOS) ---
+    console.log(
+      "⏳ Executando tarefas pendentes (Notificações & Financeiro)..."
+    );
+
+    // Executa as Notificações pendentes
+    await processNotificationQueue().catch((e) =>
+      console.error("❌ Erro na Execução Inicial de Notificações:", e)
+    );
+
+    // Executa as Transações Fixas pendentes (se o servidor ficou offline)
+    await processDailyRecurringTransactions().catch((e) =>
+      console.error("❌ Erro na Execução Inicial Financeira:", e)
+    );
+
+    // -----------------------------------------------------------
+
     // 2. CRON DE NOTIFICAÇÕES (Minuto a minuto)
     cron.schedule("* * * * *", async () => {
       await processNotificationQueue().catch((e) =>
         console.error("❌ Erro no Cron Notificações:", e)
       );
     });
-    
 
-    cron.schedule("0 6 * * *", async () => {
+    // 3. CRON FINANCEIRO (Diário agendado)
+    cron.schedule(
+      "0 6 * * *",
+      async () => {
         console.log("⏰ Iniciando verificação diária de gastos fixos...");
-        await processDailyRecurringTransactions().catch((e) => 
-            console.error("❌ Erro no Cron Financeiro:", e)
+        await processDailyRecurringTransactions().catch((e) =>
+          console.error("❌ Erro no Cron Financeiro:", e)
         );
-    }, {
-        timezone: "America/Sao_Paulo" // Importante para garantir o dia certo
-    });
+      },
+      {
+        timezone: "America/Sao_Paulo", // Importante para garantir o dia certo
+      }
+    );
 
     console.log("🕰️ Sistema de Crons (Notificação e Financeiro) ativado.");
   } catch (e) {

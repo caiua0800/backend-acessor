@@ -6,20 +6,20 @@ import {
   report,
   listTransactions,
   getInvestments,
-  addRecurring, // NOVO: Importa o novo controller
+  addRecurring,
+  searchTransactions,
 } from "../controllers/financeController";
 
 const router = Router();
 
-// Protege tudo com Login
 router.use(authenticateToken);
 
 router.post("/settings", updateSettings);
-router.post("/transaction", add); // Transação pontual
-router.post("/recurring", addRecurring); // NOVO: Transação recorrente/fixa
-
+router.post("/transaction", add); 
+router.post("/recurring", addRecurring);
+router.get("/search", searchTransactions); 
 router.get("/report", report);
-router.get("/transactions", listTransactions); // GET /finance/transactions
-router.get("/investments", getInvestments); // GET /finance/investments
+router.get("/transactions", listTransactions);
+router.get("/investments", getInvestments);
 
 export default router;
