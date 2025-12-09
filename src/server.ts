@@ -1,4 +1,3 @@
-// server.ts
 import "dotenv/config"; // Garante que .env carregue primeiro
 import express from "express";
 import cors from "cors";
@@ -21,7 +20,7 @@ import docsRoutes from "./routes/docsRoutes";
 import sheetsRoutes from "./routes/sheetsRoutes";
 import driveRoutes from "./routes/driveRoutes";
 import testRoutes from "./routes/testRoutes";
-import gymRoutes from "./routes/gymRoutes"; // Adicionei o gymRoutes aqui caso tenha esquecido
+import gymRoutes from "./routes/gymRoutes";
 
 // Importa serviços de inicialização
 import { setupMemoryTable } from "./services/memoryService";
@@ -31,23 +30,25 @@ import vaultRoutes from "./routes/vaultRoutes";
 
 const app = express();
 
+// --- CONFIGURAÇÃO CORS PERMISSIVA (BLINDADA) ---
 app.use(
   cors({
-    origin: true, 
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // Todos os métodos
+    origin: true, // Aceita a origem da requisição (reflects the request)
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
       "Authorization",
       "X-Requested-With",
       "Accept",
-      "ngrok-skip-browser-warning"
-    ], 
-    credentials: true, // Permite envio de Cookies e Headers de Autenticação
+      "ngrok-skip-browser-warning",
+    ],
+    credentials: true,
   })
 );
 
 app.use(express.json());
 
+// CRÍTICO: Usa a porta injetada pelo ambiente (DigitalOcean, Render, etc.) ou 3000
 const PORT = process.env.PORT || 3000;
 
 // Configuração das Rotas
@@ -68,7 +69,7 @@ app.use("/drive", driveRoutes);
 app.use("/test", testRoutes);
 app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
-app.use('/vault', vaultRoutes);
+app.use("/vault", vaultRoutes);
 
 async function startServer() {
   if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
@@ -76,11 +77,13 @@ async function startServer() {
   await setupMemoryTable();
 
   cron.schedule("* * * * *", async () => {
+    // console.log("⏰ Cron tick..."); // Descomente para debug
     await processNotificationQueue();
   });
   console.log("🕰️ Sistema de Notificações (Cron) ativado.");
 
   app.listen(PORT, () => {
+    // <--- Usa a porta dinâmica
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
     console.log(`✅ Memória de chat configurada e pronta.`);
   });
