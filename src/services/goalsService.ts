@@ -1,18 +1,17 @@
-// src/services/goalsService.ts
 import { pool } from "../db";
+// Importamos o parseMoney do financeiro para garantir consistência
 import { parseMoney } from "./financeService";
 
-// Interface para a criação de Meta
 interface GoalCreationData {
   goal_name: string;
-  target_amount: any; // Aceita string ou number
+  target_amount: any;
   metric_unit: string;
   category: string;
   deadline?: string;
   details_json?: object;
 }
 
-// Auxiliar para pegar o ID do usuário
+// --- HELPER PRIVADO ---
 const getUserId = async (whatsappId: string) => {
   const res = await pool.query("SELECT id FROM users WHERE phone_number = $1", [
     whatsappId,
@@ -21,22 +20,20 @@ const getUserId = async (whatsappId: string) => {
   return res.rows[0].id;
 };
 
-// Auxiliar para buscar a Meta pelo NOME (USANDO ILIKE E WILDCARDS)
+// --- HELPER PRIVADO: Busca ID pelo Nome (Para a IA) ---
 const getGoalByName = async (userId: string, goalName: string) => {
   const searchTerm = `%${goalName.trim()}%`;
-
   const res = await pool.query(
     "SELECT id FROM goals WHERE user_id = $1 AND goal_name ILIKE $2 ORDER BY LENGTH(goal_name) ASC",
     [userId, searchTerm]
   );
-
   if (res.rows.length === 0) {
     throw new Error(`Meta com o nome '${goalName}' não encontrada.`);
   }
   return res.rows[0].id;
 };
 
-// Auxiliar para buscar o histórico de progresso (para ser usado no listGoals)
+// --- HELPER PRIVADO: Histórico ---
 const getGoalProgressHistory = async (goalId: string) => {
   const res = await pool.query(
     "SELECT amount, description, created_at FROM goals_progress WHERE goal_id = $1 ORDER BY created_at DESC",
@@ -45,7 +42,11 @@ const getGoalProgressHistory = async (goalId: string) => {
   return res.rows;
 };
 
-// 1. goals_create
+// ==========================================================
+// FUNÇÕES PRINCIPAIS
+// ==========================================================
+
+// 1. CRIAR META (Usado por IA e Controller)
 export const createGoal = async (
   whatsappId: string,
   data: GoalCreationData
@@ -57,6 +58,10 @@ export const createGoal = async (
     throw new Error("O valor da meta deve ser maior que zero.");
   }
 
+  // Tratamento para evitar string vazia no deadline
+  const deadlineValue =
+    data.deadline && data.deadline.trim() !== "" ? data.deadline : null;
+
   const res = await pool.query(
     `INSERT INTO goals 
      (user_id, goal_name, target_amount, metric_unit, category, deadline, details_json)
@@ -66,16 +71,16 @@ export const createGoal = async (
       userId,
       data.goal_name,
       targetAmount,
-      data.metric_unit,
-      data.category,
-      data.deadline || null,
+      data.metric_unit || "Unid",
+      data.category || "Geral",
+      deadlineValue,
       data.details_json || {},
     ]
   );
   return res.rows[0];
 };
 
-// 2. goals_update_progress (CORRIGIDA PARA USAR O NOME E DESCRIÇÃO)
+// 2. ATUALIZAR PROGRESSO (Usado por IA)
 export const updateGoalProgress = async (
   whatsappId: string,
   goalName: string,
@@ -93,12 +98,11 @@ export const updateGoalProgress = async (
   }
 
   const client = await pool.connect();
-  let updatedGoal = null;
 
   try {
     await client.query("BEGIN");
 
-    // A. Atualiza o progresso na tabela goals
+    // A. Atualiza o valor na meta
     const updateRes = await client.query(
       `UPDATE goals 
        SET current_progress = current_progress + $1, updated_at = NOW()
@@ -108,32 +112,29 @@ export const updateGoalProgress = async (
     );
 
     if ((updateRes.rowCount ?? 0) === 0) {
-      throw new Error(
-        "Meta não encontrada ou você não tem permissão para editá-la."
-      );
+      throw new Error("Meta não encontrada.");
     }
-    updatedGoal = updateRes.rows[0];
+    const updatedGoal = updateRes.rows[0];
 
-    // B. (Opcional) Registra o incremento na tabela goals_progress
-    if (Math.abs(progressAmount) > 0) {
-      await client.query(
-        `INSERT INTO goals_progress (goal_id, amount, description, source_transaction_id)
-             VALUES ($1, $2, $3, $4)`,
-        [
-          goalId,
-          progressAmount,
-          description || null,
-          sourceTransactionId || null,
-        ]
-      );
-    }
+    // B. Registra histórico
+    await client.query(
+      `INSERT INTO goals_progress (goal_id, amount, description, source_transaction_id)
+       VALUES ($1, $2, $3, $4)`,
+      [goalId, progressAmount, description || null, sourceTransactionId || null]
+    );
 
     await client.query("COMMIT");
 
-    // CORREÇÃO: Retorna o objeto da meta atualizada mais a descrição da ação
+    // Retorna com cálculo de porcentagem atualizado
+    const target = parseFloat(updatedGoal.target_amount);
+    const current = parseFloat(updatedGoal.current_progress);
+
     return {
       ...updatedGoal,
-      progress_description: description || "Progresso adicionado.",
+      target_amount: target,
+      current_progress: current,
+      progress_percent: target > 0 ? ((current / target) * 100).toFixed(1) : 0,
+      progress_description: description,
     };
   } catch (e) {
     await client.query("ROLLBACK");
@@ -143,42 +144,34 @@ export const updateGoalProgress = async (
   }
 };
 
-// 3. goals_list (CORRIGIDO PARA INCLUIR HISTÓRICO)
+// 3. LISTAR METAS (Usado por IA e Controller)
 export const listGoals = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
 
   const res = await pool.query(
-    `SELECT 
-        id, goal_name, category, target_amount, current_progress, metric_unit, deadline, details_json
-     FROM goals 
-     WHERE user_id = $1 
-     ORDER BY created_at DESC`,
+    `SELECT * FROM goals WHERE user_id = $1 ORDER BY created_at DESC`,
     [userId]
   );
 
   const goalsWithHistoryPromises = res.rows.map(async (row) => {
-    // Busca o histórico de progresso para CADA meta
     const history = await getGoalProgressHistory(row.id);
+    const target = parseFloat(row.target_amount);
+    const progress = parseFloat(row.current_progress);
 
     return {
       ...row,
-      target_amount: parseFloat(row.target_amount),
-      current_progress: parseFloat(row.current_progress),
-      progress_percent: (
-        (parseFloat(row.current_progress) / parseFloat(row.target_amount)) *
-        100
-      ).toFixed(2),
-      is_completed:
-        parseFloat(row.current_progress) >= parseFloat(row.target_amount),
-      progress_history: history, // <--- ADICIONA O HISTÓRICO AQUI
+      target_amount: target,
+      current_progress: progress,
+      progress_percent: target > 0 ? ((progress / target) * 100).toFixed(2) : 0,
+      is_completed: progress >= target,
+      progress_history: history,
     };
   });
 
-  // Executa todas as buscas de histórico em paralelo
   return Promise.all(goalsWithHistoryPromises);
 };
 
-// 4. goals_delete (CORRIGIDA PARA USAR O NOME)
+// 4. DELETAR META POR NOME (Usado pela IA)
 export const deleteGoalByName = async (
   whatsappId: string,
   goalName: string
@@ -194,14 +187,46 @@ export const deleteGoalByName = async (
   return (res.rowCount ?? 0) > 0;
 };
 
-// 5. goals_update (para detalhes e nome) (ADICIONAR BUSCA PELO NOME)
+// ==========================================================
+// FUNÇÕES EXTRAS (RESTORED FOR CONTROLLER)
+// ==========================================================
+
+// 5. DELETAR META POR ID (Usado pelo Controller REST API)
+export const deleteGoal = async (whatsappId: string, goalId: string) => {
+  const userId = await getUserId(whatsappId);
+
+  const res = await pool.query(
+    "DELETE FROM goals WHERE id = $1 AND user_id = $2 RETURNING id",
+    [goalId, userId]
+  );
+
+  return (res.rowCount ?? 0) > 0;
+};
+
+// 6. ATUALIZAR DETALHES (Usado pelo Controller REST API)
+// Permite editar nome, valor alvo, data, etc.
 export const updateGoalDetails = async (
   whatsappId: string,
-  goalName: string,
+  goalIdOrName: string, // Pode vir ID do controller ou Nome se adaptar no futuro
   data: Partial<GoalCreationData>
 ) => {
   const userId = await getUserId(whatsappId);
-  const goalId = await getGoalByName(userId, goalName);
+
+  // Verifica se é UUID (assumindo que o ID é UUID). Se não for, busca pelo nome.
+  // Se seu ID for inteiro, mude a regex para /^\d+$/
+  const isUuid =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+      goalIdOrName
+    );
+
+  let goalId = goalIdOrName;
+  if (!isUuid) {
+    try {
+      goalId = await getGoalByName(userId, goalIdOrName);
+    } catch (e) {
+      // Se falhar a busca por nome, assume que o usuário passou um ID mesmo que não pareça UUID (ou falha)
+    }
+  }
 
   const fields = [];
   const values = [];
@@ -224,19 +249,16 @@ export const updateGoalDetails = async (
     values.push(data.deadline);
   }
   if (data.details_json) {
-    // Usa o operador de concatenação JSONB para atualizar o JSON, não sobrescrever
     fields.push(`details_json = details_json || $${queryIndex++}`);
     values.push(data.details_json);
   }
 
   if (fields.length === 0) {
-    throw new Error(
-      "Nenhum campo fornecido para atualização de detalhes da meta."
-    );
+    throw new Error("Nenhum campo fornecido para atualização.");
   }
 
   fields.push("updated_at = NOW()");
-  values.push(goalId, userId); // Valores para o WHERE (ID E USER_ID)
+  values.push(goalId, userId);
 
   const res = await pool.query(
     `UPDATE goals 
@@ -247,16 +269,4 @@ export const updateGoalDetails = async (
   );
 
   return res.rows[0];
-};
-
-// 4. goals_delete
-export const deleteGoal = async (whatsappId: string, goalId: string) => {
-  const userId = await getUserId(whatsappId);
-
-  const res = await pool.query(
-    "DELETE FROM goals WHERE id = $1 AND user_id = $2 RETURNING id",
-    [goalId, userId]
-  );
-
-  return (res.rowCount ?? 0) > 0;
 };

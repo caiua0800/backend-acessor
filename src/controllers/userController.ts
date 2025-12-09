@@ -3,9 +3,10 @@ import { createNewUser } from "../services/userService";
 
 export const createUser = async (req: Request, res: Response) => {
   try {
-    // Extrai todos os campos, incluindo os opcionais
     const {
       full_name,
+      email,          // <--- NOVO
+      password,       // <--- NOVO
       country_code,
       area_code,
       phone_number,
@@ -17,16 +18,18 @@ export const createUser = async (req: Request, res: Response) => {
     } = req.body;
 
     // Validação dos campos obrigatórios
-    if (!full_name || !country_code || !area_code || !phone_number) {
+    if (!full_name || !email || !password || !country_code || !area_code || !phone_number) {
       return res.status(400).json({
         error:
-          "Campos obrigatórios: full_name, country_code, area_code, phone_number",
+          "Campos obrigatórios: full_name, email, password, country_code, area_code, phone_number",
       });
     }
 
     // Passa todos os dados para o serviço
     const newUser = await createNewUser({
       fullName: full_name,
+      email: email,       
+      password: password,
       countryCode: country_code,
       areaCode: area_code,
       rawNumber: phone_number,
@@ -39,14 +42,26 @@ export const createUser = async (req: Request, res: Response) => {
 
     res.json({
       status: "success",
-      message: "Usuário e configurações criados com sucesso!",
+      message: "Usuário criado com sucesso!",
       user: newUser,
     });
   } catch (e: any) {
+    // Tratamento de erro de duplicidade (Postgres Error 23505)
     if (e.code === "23505") {
-      // Erro de telefone duplicado
+      // Verifica qual constraint violou para dar msg melhor
+      if (e.detail && e.detail.includes("email")) {
+        return res.status(409).json({
+            error: "Este e-mail já está cadastrado.",
+        });
+      }
+      if (e.detail && e.detail.includes("phone_number")) {
+        return res.status(409).json({
+            error: "Este número de telefone já está cadastrado.",
+        });
+      }
+      
       return res.status(409).json({
-        error: "Já existe um usuário cadastrado com este número de telefone.",
+        error: "Dados duplicados (e-mail ou telefone).",
       });
     }
     // Outros erros

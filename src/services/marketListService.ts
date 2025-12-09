@@ -1,16 +1,15 @@
 // src/services/marketListService.ts
 import { pool } from "../db";
 
-// Auxiliar para pegar o ID do usuário
 const getUserId = async (whatsappId: string) => {
   const res = await pool.query("SELECT id FROM users WHERE phone_number = $1", [
     whatsappId,
   ]);
-  if (res.rows.length === 0)
-    throw new Error("Usuário não encontrado para a lista de compras.");
+  if (res.rows.length === 0) throw new Error("Usuário não encontrado.");
   return res.rows[0].id;
 };
 
+// Adiciona item único (interno)
 const addSingleItem = async (
   client: any,
   userId: string,
@@ -18,6 +17,11 @@ const addSingleItem = async (
   quantity: number = 1
 ) => {
   const normalizedItemName = itemName.trim().toLowerCase();
+
+  // LOG DB
+  console.log(
+    `🛒 [DB INSERT] User: ${userId} | Item: ${normalizedItemName} | Qty: ${quantity}`
+  );
 
   const res = await client.query(
     `INSERT INTO market_list_items (user_id, item_name, quantity)
@@ -34,7 +38,6 @@ const addSingleItem = async (
   return res.rows[0];
 };
 
-// Edita a quantidade de um item específico (mantendo a função original)
 export const updateItemQuantity = async (
   whatsappId: string,
   itemId: string,
@@ -42,9 +45,7 @@ export const updateItemQuantity = async (
 ) => {
   const userId = await getUserId(whatsappId);
 
-  // Se a nova quantidade for zero ou menos, remove o item
   if (newQuantity <= 0) {
-    // Chamando a função de remoção que usa o ID
     return removeItemFromList(whatsappId, itemId);
   }
 
@@ -58,7 +59,6 @@ export const updateItemQuantity = async (
   return res.rows[0];
 };
 
-// Remove um item da lista pelo ID dele (mantendo a função original)
 export const removeItemFromList = async (
   whatsappId: string,
   itemId: string
@@ -69,12 +69,11 @@ export const removeItemFromList = async (
     [itemId, userId]
   );
   return {
-    message: `${res.rowCount ?? 0} item(s) removido(s) com sucesso.`,
+    message: "Item removido.",
     deleted_count: res.rowCount ?? 0,
   };
 };
 
-// FUNÇÃO NOVO: Remove um item da lista pelo NOME (USADO PELO SPECIALIST)
 export const removeItemByName = async (
   whatsappId: string,
   itemName: string
@@ -82,20 +81,17 @@ export const removeItemByName = async (
   const userId = await getUserId(whatsappId);
   const normalizedItemName = itemName.trim().toLowerCase();
 
-  // Deleta os itens que correspondem ao nome
   const res = await pool.query(
     "DELETE FROM market_list_items WHERE user_id = $1 AND item_name ILIKE $2",
-    [userId, `%${normalizedItemName}%`] // Usa ILIKE com wildcards para busca flexível
+    [userId, `%${normalizedItemName}%`]
   );
 
-  // Retorna a contagem de itens deletados
   return {
-    message: `${res.rowCount ?? 0} item(s) removido(s) com sucesso.`,
+    message: "Item removido.",
     deleted_count: res.rowCount ?? 0,
   };
 };
 
-// Limpa a lista inteira do usuário
 export const clearList = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
   const res = await pool.query(
@@ -103,12 +99,11 @@ export const clearList = async (whatsappId: string) => {
     [userId]
   );
   return {
-    message: "Lista de compras limpa.",
+    message: "Lista limpa.",
     deleted_count: res.rowCount ?? 0,
   };
 };
 
-// Pega a lista atual do usuário
 export const getList = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
   const res = await pool.query(
@@ -118,16 +113,21 @@ export const getList = async (whatsappId: string) => {
   return res.rows;
 };
 
+// Função Principal de Adição
 export const addMultipleItemsToList = async (
   whatsappId: string,
   items: { itemName: string; quantity: number }[]
 ) => {
   const userId = await getUserId(whatsappId);
-
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
+
+    // LOG DE INÍCIO
+    console.log(
+      `🛒 [SERVICE] Iniciando adição de ${items.length} itens para ${whatsappId}`
+    );
 
     const results = [];
     for (const item of items) {
@@ -141,9 +141,10 @@ export const addMultipleItemsToList = async (
     }
 
     await client.query("COMMIT");
-    return results as { item_name: string; quantity: number }[];
+    return results;
   } catch (e) {
     await client.query("ROLLBACK");
+    console.error("🛒 [SERVICE ERROR] Rollback executado:", e);
     throw e;
   } finally {
     client.release();

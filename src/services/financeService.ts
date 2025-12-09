@@ -1,15 +1,13 @@
 import { pool } from "../db";
 
-// --- FUNÇÃO DE LIMPEZA FINANCEIRA ---
+// --- 1. FUNÇÃO DE PARSING INTELIGENTE ---
 export const parseMoney = (value: any): number => {
   if (typeof value === "number") return value;
   if (!value) return 0;
 
   let clean = value.toString().trim();
-  // Limpa tudo que não é número ou pontuação decimal
   clean = clean.replace(/[^\d.,-]/g, "");
 
-  // Lógica BR vs US
   if (clean.includes(",") && clean.length - clean.lastIndexOf(",") <= 3) {
     clean = clean.replace(/\./g, "");
     clean = clean.replace(",", ".");
@@ -21,6 +19,7 @@ export const parseMoney = (value: any): number => {
   return isNaN(result) ? 0 : result;
 };
 
+// --- HELPER PRIVADO ---
 const getUserId = async (whatsappId: string) => {
   const res = await pool.query("SELECT id FROM users WHERE phone_number = $1", [
     whatsappId,
@@ -29,7 +28,7 @@ const getUserId = async (whatsappId: string) => {
   return res.rows[0].id;
 };
 
-// 1. CONFIGURAR PERFIL
+// --- 2. CONFIGURAR PERFIL ---
 export const setFinanceSettings = async (
   whatsappId: string,
   income: any,
@@ -38,25 +37,34 @@ export const setFinanceSettings = async (
   currency: string = "BRL"
 ) => {
   const userId = await getUserId(whatsappId);
-  const incomeVal = parseMoney(income);
-  const limitVal = parseMoney(limit);
-
-  const hasBalanceUpdate =
-    currentBalance !== undefined &&
-    currentBalance !== null &&
-    currentBalance !== "";
-  const balanceVal = hasBalanceUpdate ? parseMoney(currentBalance) : null;
 
   const checkRes = await pool.query(
-    "SELECT current_account_amount FROM finance_settings WHERE user_id = $1",
+    `SELECT estimated_monthly_income, spending_limit, current_account_amount 
+     FROM finance_settings WHERE user_id = $1`,
     [userId]
   );
 
+  let finalIncome = 0;
+  let finalLimit = 0;
+  let finalBalance = 0;
+
   if (checkRes.rows.length > 0) {
-    const currentDbBalance = parseFloat(
-      checkRes.rows[0].current_account_amount || 0
-    );
-    const finalBalance = hasBalanceUpdate ? balanceVal : currentDbBalance;
+    const current = checkRes.rows[0];
+
+    finalIncome =
+      income !== undefined && income !== null
+        ? parseMoney(income)
+        : parseFloat(current.estimated_monthly_income || 0);
+
+    finalLimit =
+      limit !== undefined && limit !== null
+        ? parseMoney(limit)
+        : parseFloat(current.spending_limit || 0);
+
+    finalBalance =
+      currentBalance !== undefined && currentBalance !== null
+        ? parseMoney(currentBalance)
+        : parseFloat(current.current_account_amount || 0);
 
     await pool.query(
       `UPDATE finance_settings 
@@ -65,37 +73,48 @@ export const setFinanceSettings = async (
            current_account_amount = $3, 
            currency = $4
        WHERE user_id = $5`,
-      [incomeVal, limitVal, finalBalance, currency, userId]
+      [finalIncome, finalLimit, finalBalance, currency, userId]
     );
   } else {
-    const finalBalance = hasBalanceUpdate ? balanceVal : 0;
+    finalIncome = parseMoney(income);
+    finalLimit = parseMoney(limit);
+    finalBalance = parseMoney(currentBalance);
+
     await pool.query(
-      `INSERT INTO finance_settings (user_id, estimated_monthly_income, spending_limit, current_account_amount, currency)
+      `INSERT INTO finance_settings 
+        (user_id, estimated_monthly_income, spending_limit, current_account_amount, currency)
        VALUES ($1, $2, $3, $4, $5)`,
-      [userId, incomeVal, limitVal, finalBalance, currency]
+      [userId, finalIncome, finalLimit, finalBalance, currency]
     );
   }
 
-  return "Configurações financeiras salvas com sucesso!";
+  return "Configurações salvas.";
 };
 
-// 2. ADICIONAR TRANSAÇÃO (CORREÇÃO DE FUSO NO CREATED_AT)
+// --- 3. ADICIONAR TRANSAÇÃO ---
 export const addTransaction = async (whatsappId: string, data: any) => {
   const userId = await getUserId(whatsappId);
 
   const amountVal = Math.abs(parseMoney(data.amount));
   const type = data.type ? data.type.toLowerCase().trim() : "expense";
 
-  const dateStringInLocalTimezone = data.date ? `${data.date}T00:00:00` : null;
-  const transactionDate = dateStringInLocalTimezone ? new Date(dateStringInLocalTimezone) : new Date();
-  const createdAt = new Date(); 
+  let transactionDate = new Date();
+  if (data.date) {
+    if (data.date.includes("T")) {
+      transactionDate = new Date(data.date);
+    } else {
+      transactionDate = new Date(`${data.date}T00:00:00`);
+    }
+  }
+  if (isNaN(transactionDate.getTime())) transactionDate = new Date();
+
+  const createdAt = new Date();
 
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    // A. Busca Saldo Atual
     const settingsRes = await client.query(
       `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
       [userId]
@@ -108,12 +127,12 @@ export const addTransaction = async (whatsappId: string, data: any) => {
       );
     } else {
       await client.query(
-        `INSERT INTO finance_settings (user_id, current_account_amount) VALUES ($1, 0)`,
+        `INSERT INTO finance_settings (user_id, current_account_amount, estimated_monthly_income, spending_limit) 
+         VALUES ($1, 0, 0, 0)`,
         [userId]
       );
     }
 
-    // B. Calcula
     const beforeAmount = currentBalance;
     let afterAmount = currentBalance;
 
@@ -123,7 +142,6 @@ export const addTransaction = async (whatsappId: string, data: any) => {
       afterAmount = currentBalance - amountVal;
     }
 
-    // C. Salva (Passando created_at explicitamente)
     await client.query(
       `INSERT INTO transactions 
        (user_id, amount, type, category, description, receipt_url, transaction_date, before_account_amount, current_account_amount, created_at)
@@ -132,17 +150,16 @@ export const addTransaction = async (whatsappId: string, data: any) => {
         userId,
         amountVal,
         type,
-        data.category,
-        data.description,
+        data.category || (type === "income" ? "Entrada" : "Outros"),
+        data.description || "",
         data.receipt_url || null,
         transactionDate,
         beforeAmount,
         afterAmount,
-        createdAt, // <--- AQUI VAI A DATA CORRETA DE BRASÍLIA
+        createdAt,
       ]
     );
 
-    // D. Atualiza Saldo Global
     await client.query(
       `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
       [afterAmount, userId]
@@ -150,9 +167,7 @@ export const addTransaction = async (whatsappId: string, data: any) => {
 
     await client.query("COMMIT");
 
-    return `Feito! Valor: ${amountVal}. Saldo anterior: ${beforeAmount.toFixed(
-      2
-    )}. Novo saldo: ${afterAmount.toFixed(2)}.`
+    return `Sucesso.`;
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -161,7 +176,7 @@ export const addTransaction = async (whatsappId: string, data: any) => {
   }
 };
 
-// 3. RELATÓRIO
+// --- 4. RELATÓRIO COMPLETO (AGREGADO) ---
 export const getFinanceReport = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
 
@@ -173,13 +188,13 @@ export const getFinanceReport = async (whatsappId: string) => {
   const settings = settingsRes.rows[0] || {};
   const currentBalance = parseFloat(settings.current_account_amount || 0);
   const spendingLimit = parseFloat(settings.spending_limit || 0);
+  const estimatedIncome = parseFloat(settings.estimated_monthly_income || 0);
 
-  // Soma Mês Atual (A query SQL ainda usa o fuso do banco, mas podemos ajustar aqui se precisar)
   const summaryRes = await pool.query(
     `SELECT type, SUM(amount) as total 
      FROM transactions 
      WHERE user_id = $1 
-     AND transaction_date >= date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') -- Força fuso no select
+     AND transaction_date >= date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') 
      GROUP BY type`,
     [userId]
   );
@@ -195,6 +210,10 @@ export const getFinanceReport = async (whatsappId: string) => {
   return {
     moeda: settings.currency || "BRL",
     saldo_atual_conta: currentBalance,
+    config: {
+      renda_estipulada: estimatedIncome,
+      limite_estipulado: spendingLimit,
+    },
     resumo_mes: {
       ganhos: incomeMonth,
       gastos: expenseMonth,
@@ -210,6 +229,29 @@ export const getFinanceReport = async (whatsappId: string) => {
   };
 };
 
+// --- 5. LISTAR ÚLTIMAS TRANSAÇÕES (NOVO) ---
+export const getLastTransactions = async (whatsappId: string, limit = 10) => {
+  const userId = await getUserId(whatsappId);
+
+  const res = await pool.query(
+    `SELECT amount, type, category, description, transaction_date 
+     FROM transactions 
+     WHERE user_id = $1 
+     ORDER BY transaction_date DESC 
+     LIMIT $2`,
+    [userId, limit]
+  );
+
+  return res.rows.map((row) => ({
+    amount: parseFloat(row.amount),
+    type: row.type,
+    category: row.category,
+    description: row.description,
+    date: row.transaction_date, // Objeto Date
+  }));
+};
+
+// --- 6. INVESTIMENTOS ---
 export const addInvestment = async (
   whatsappId: string,
   assetName: string,
@@ -218,11 +260,8 @@ export const addInvestment = async (
   const userId = await getUserId(whatsappId);
   const amountVal = parseMoney(amount);
 
-  if (amountVal <= 0) {
-    throw new Error("O valor do investimento deve ser maior que zero.");
-  }
+  if (amountVal <= 0) throw new Error("Valor inválido.");
 
-  // Simplesmente insere o registro na nova tabela
   const res = await pool.query(
     `INSERT INTO investments (user_id, asset_name, amount, investment_date)
        VALUES ($1, $2, $3, NOW())
@@ -230,29 +269,18 @@ export const addInvestment = async (
     [userId, assetName, amountVal]
   );
 
-  return {
-    message: "Investimento registrado com sucesso!",
-    investment: res.rows[0],
-  };
+  return { message: "Investimento registrado!", investment: res.rows[0] };
 };
 
 export const listInvestments = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
 
-  // Busca todos os investimentos e também a soma total por ativo
   const res = await pool.query(
-    `SELECT 
-          asset_name, 
-          SUM(amount) as total_invested,
-          COUNT(*) as contributions
-       FROM investments
-       WHERE user_id = $1
-       GROUP BY asset_name
-       ORDER BY total_invested DESC`,
+    `SELECT asset_name, SUM(amount) as total_invested, COUNT(*) as contributions
+       FROM investments WHERE user_id = $1 GROUP BY asset_name ORDER BY total_invested DESC`,
     [userId]
   );
 
-  // Calcula o total geral investido
   const totalPortfolio = res.rows.reduce(
     (sum, row) => sum + parseFloat(row.total_invested),
     0

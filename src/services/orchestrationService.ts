@@ -1,4 +1,3 @@
-// src/services/orchestrationService.ts (AJUSTADO PARA JSON)
 
 import * as aiService from "./aiService";
 import { UserContext } from "./types";
@@ -14,63 +13,26 @@ import { goalsSpecialist } from "../specialists/goalsSpecialist";
 import { financeSpecialist } from "../specialists/financeSpecialist";
 import { gmailSpecialist } from "../specialists/gmailSpecialist";
 import { fileManagerSpecialist } from "../specialists/fileManagerSpecialist";
+import { vaultSpecialist } from "../specialists/vaultSpecialist";
+import { generalSpecialist } from "../specialists/generalSpecialist";
+import { gymSpecialist } from "../specialists/gymSpecialist";
+import { todoSpecialist } from "../specialists/todoSpecialist";
 
 // Mapeamento de keywords para as funções de especialista
-const specialistMap: Record<string, (context: UserContext) => Promise<any>> = {
-  // Promise<any> pois retorna JSON
-  market: marketSpecialist,
-  ideas: ideasSpecialist,
-  calendar: calendarSpecialist,
-  goals: goalsSpecialist,
-  finance: financeSpecialist,
-  email: gmailSpecialist,
-  files: fileManagerSpecialist,
+// O retorno agora é Promise<string>
+const specialistMap: Record<string, (context: UserContext) => Promise<string>> = {
+  market: marketSpecialist as (context: UserContext) => Promise<string>,
+  ideas: ideasSpecialist as (context: UserContext) => Promise<string>,
+  calendar: calendarSpecialist as (context: UserContext) => Promise<string>,
+  goals: goalsSpecialist as (context: UserContext) => Promise<string>,
+  finance: financeSpecialist as (context: UserContext) => Promise<string>,
+  email: gmailSpecialist as (context: UserContext) => Promise<string>,
+  files: fileManagerSpecialist as (context: UserContext) => Promise<string>,
+  vault: vaultSpecialist as (context: UserContext) => Promise<string>,
+  gym: gymSpecialist as (context: UserContext) => Promise<string>,
+  todo: todoSpecialist as (context: UserContext) => Promise<string>,
+
 };
-
-// =================================================================
-// ESPECIALISTA DE CONVERSA GERAL (Permanece igual)
-// =================================================================
-export async function generalSpecialist(context: UserContext): Promise<string> {
-  const { waId, fullMessage, userConfig } = context;
-
-  const chatHistoryText = await memoryService.loadHistory(waId);
-
-  const systemMessage = `
-        ===[SISTEMA: Data Atual: ${aiService.getSaoPauloTime()}]\n
-        Você é um assistente pessoal. Sua identidade é:
-        - Nome: ${userConfig.agent_nickname}
-        - Gênero: ${userConfig.agent_gender}
-        - Personalidade: ${userConfig.agent_personality.join(", ")}
-        
-        Você está conversando com ${userConfig.user_nickname}.
-        
-        ### SUA MISSÃO CRÍTICA ###
-        Sua única tarefa é conversar e entreter.
-        
-        ### REGRA DE PROIBIÇÃO (MÁXIMA PRIORIDADE) ###
-        1. VOCÊ NÃO TEM FERRAMENTAS.
-        2. NUNCA mencione ter agendado, pausado, adicionado itens, etc.
-        
-        ### HISTÓRICO DE CONVERSA (PARA CONTEXTO) ###
-        ${chatHistoryText}
-        
-        Aja com sua personalidade e responda à última mensagem.
-    `;
-
-  try {
-    const responseText = await aiService.generalCompletion(
-      systemMessage,
-      fullMessage
-    );
-
-    await memoryService.saveToHistory(waId, fullMessage, responseText);
-
-    return responseText;
-  } catch (error) {
-    console.error("Erro no General Specialist:", error);
-    return "Desculpe, tive um problema de comunicação, mas estou de volta! Manda de novo.";
-  }
-}
 
 // =================================================================
 // O MOTOR DE ORQUESTRAÇÃO PRINCIPAL
@@ -80,13 +42,17 @@ export async function processAndOrchestrate(
 ): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
 
-  // 1. PASSO DE DISPATCH
-  const keywords = await aiService.identifyTasks(fullMessage);
+  // NOVO: 1. CARREGA O HISTÓRICO DE CONVERSA DO DB PARA O DISPATCH
+  const chatHistoryText = await memoryService.loadHistory(waId);
+
+  // 2. PASSO DE DISPATCH: Identifica as intenções
+  // MODIFICADO: Passa o histórico para a função
+  const keywords = await aiService.identifyTasks(fullMessage, chatHistoryText); 
   console.log(
     `🤖 Agente Despachante identificou as tarefas: ${keywords.join(", ")}`
   );
 
-  // 2. TRATAMENTO DA CONVERSA GERAL
+  // 3. TRATAMENTO DA CONVERSA GERAL
   const isGeneralConversation =
     keywords.includes("general") || keywords.length === 0;
 
@@ -94,44 +60,31 @@ export async function processAndOrchestrate(
     return generalSpecialist(context);
   }
 
-  // 3. PASSO DE ORQUESTRAÇÃO PARALELA
+  // 4. PASSO DE ORQUESTRAÇÃO PARALELA
+  // Filtra e executa apenas os especialistas necessários
   const specialistPromises = keywords
     .filter((k) => specialistMap[k])
     .map((keyword) => specialistMap[keyword](context));
 
+  // Fallback de segurança (caso a keyword exista mas não esteja no mapa)
   if (specialistPromises.length === 0) {
     return generalSpecialist(context);
   }
 
-  // 4. SINCRONIZAÇÃO: Executa TUDO e coleta os JSONs Técnicos
-  const technicalResults: any[] = await Promise.all(specialistPromises);
+  // Executa todos em paralelo e aguarda os resultados (que são strings)
+  const results: string[] = await Promise.all(specialistPromises);
 
-  // 5. COLETA DE ERROS CRÍTICOS E AUTENTICAÇÃO
-  const authError = technicalResults.find(
-    (res) => res.status === "FAILURE" && res.reason === "AUTH_REQUIRED"
-  );
-  const allFailures = technicalResults.filter(
-    (res) => res.status === "FAILURE"
-  );
+  // 5. FILTRAGEM DE RESPOSTAS VÁLIDAS
+  const validResponses = results.filter((res) => typeof res === 'string' && res.length > 0);
 
-  if (authError) {
-    // Assume que o erro de AUTH_REQUIRED já contém o link no 'detail'
-    return allFailures.map((f) => f.detail).join("\n\n");
-  }
-
-  // 6. TRATAMENTO DE FALHA
-  if (technicalResults.every((res) => res.status !== "SUCCESS")) {
-    // Se NENHUMA tarefa foi sucesso, resumimos os erros.
-    if (allFailures.length > 0) {
-      const errorDetails = allFailures.map((f) => f.detail).join("; ");
-      return `*Desculpe, não consegui completar as tarefas devido a um erro:* ${errorDetails}`;
-    }
+  // 6. TRATAMENTO DE FALHA GERAL
+  if (validResponses.length === 0) {
     return generalSpecialist(context);
   }
 
-  // 7. AGENTE DE FORMATAÇÃO (JSON -> VOZ FINAL)
-  const finalMessage = await aiService.formatFinalResponse(
-    technicalResults,
+  // 7. UNIFICAÇÃO (SUMMARIZER)
+  const finalMessage = await aiService.summarizerResponse(
+    validResponses,
     userConfig
   );
 

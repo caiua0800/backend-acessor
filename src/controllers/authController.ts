@@ -1,5 +1,57 @@
 import { Request, Response } from "express";
 import { getAuthUrl, handleCallback } from "../services/googleService";
+import { loginUser, refreshSession, logoutUser } from "../services/authService";
+
+const getIp = (req: Request) => {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string") return forwarded.split(",")[0];
+  return req.ip || "unknown";
+};
+
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+    const ip = getIp(req);
+    const userAgent = req.headers["user-agent"] || "unknown";
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "E-mail e senha são obrigatórios." });
+    }
+
+    const result = await loginUser(email, password, ip, userAgent);
+    res.json(result);
+  } catch (e: any) {
+    res.status(401).json({ error: e.message });
+  }
+};
+
+export const refreshToken = async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+    const ip = getIp(req);
+
+    if (!refreshToken) {
+      return res.status(400).json({ error: "Refresh token obrigatório." });
+    }
+
+    const tokens = await refreshSession(refreshToken, ip);
+    res.json(tokens);
+  } catch (e: any) {
+    res.status(403).json({ error: e.message });
+  }
+};
+
+export const logout = async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+    if (refreshToken) {
+      await logoutUser(refreshToken);
+    }
+    res.json({ message: "Desconectado com sucesso." });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+};
 
 export const connect = (req: Request, res: Response) => {
   try {

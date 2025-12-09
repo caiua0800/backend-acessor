@@ -1,89 +1,160 @@
 // src/specialists/marketSpecialist.ts
+
 import * as marketListService from "../services/marketListService";
 import * as aiService from "../services/aiService";
 import { UserContext, MarketItem } from "../services/types";
 
-// Interfaces para a IA retornar
-interface ListData { list_all: boolean; }
-interface DeleteData { item_name: string; delete: boolean; }
-interface ClearData { clear_all: boolean; }
-
-// Tipos de dados que o especialista pode extrair (para adicionar)
+// Interfaces
+interface ListData {
+  list_all: boolean;
+}
+interface DeleteData {
+  item_name: string;
+  delete: boolean;
+}
+interface ClearData {
+  clear_all: boolean;
+}
 type MarketExtractionData = MarketItem[] | ListData | DeleteData | ClearData;
 
-export async function marketSpecialist(context: UserContext): Promise<any> {
-  const { waId, fullMessage } = context;
+// --- FUNÇÃO DE LIMPEZA (IMPORTANTE PARA EVITAR ERROS DE PARSE) ---
+function cleanJsonOutput(rawOutput: string): string {
+  const start = rawOutput.indexOf("["); // Procura início de Array
+  const startObj = rawOutput.indexOf("{"); // Procura início de Objeto
 
-  // Prompt MESTRE DE INTENÇÃO: A IA deve retornar a ação e os dados
+  // Decide quem vem primeiro (para saber se é array ou objeto)
+  let startIndex = -1;
+  if (start !== -1 && startObj !== -1) {
+    startIndex = start < startObj ? start : startObj;
+  } else if (start !== -1) {
+    startIndex = start;
+  } else {
+    startIndex = startObj;
+  }
+
+  const end = rawOutput.lastIndexOf("]");
+  const endObj = rawOutput.lastIndexOf("}");
+
+  let endIndex = -1;
+  if (end !== -1 && endObj !== -1) {
+    endIndex = end > endObj ? end : endObj;
+  } else if (end !== -1) {
+    endIndex = end;
+  } else {
+    endIndex = endObj;
+  }
+
+  if (startIndex !== -1 && endIndex !== -1) {
+    return rawOutput.substring(startIndex, endIndex + 1);
+  }
+  return rawOutput;
+}
+
+export async function marketSpecialist(context: UserContext): Promise<string> {
+  const { waId, fullMessage, userConfig } = context;
+
   const extractionPrompt = `
-    Você é um Extrator de Ações de Mercado. Analise a mensagem e retorne APENAS um ÚNICO OBJETO JSON que melhor representa a intenção primária do usuário.
+    Você é um Extrator de Ações de Mercado. Analise a mensagem e retorne APENAS o JSON.
     
     ### REGRAS CRÍTICAS ###
-    1. ADICIONAR: Se for adicionar, retorne um ARRAY de itens: [ {"itemName": "nome", "quantity": num}, ... ]
-    2. LISTAR: Se for listar, retorne: {"list_all": true}
-    3. EXCLUIR: Se for excluir um item, retorne: {"item_name": "Nome do Item", "delete": true}
-    4. LIMPAR: Se for limpar a lista inteira, retorne: {"clear_all": true}
-    5. Nenhuma das anteriores: retorne um objeto vazio: {}
+    1. ADICIONAR: Retorne um ARRAY: [ {"itemName": "nome", "quantity": num}, ... ]
+    2. LISTAR: Retorne: {"list_all": true}
+    3. EXCLUIR: Retorne: {"item_name": "Nome do Item", "delete": true}
+    4. LIMPAR: Retorne: {"clear_all": true}
+    5. Nenhuma das anteriores: retorne objeto vazio {}
   `;
 
   try {
-    const jsonString = await aiService.extractData(
+    // 1. EXTRAÇÃO
+    const rawJsonString = await aiService.extractData(
       extractionPrompt,
       fullMessage
     );
+
+    // LOG 1: O que a IA mandou cru?
+    console.log("🛒 [MARKET RAW IA]:", rawJsonString);
+
+    const jsonString = cleanJsonOutput(rawJsonString);
     const data: MarketExtractionData = JSON.parse(jsonString);
 
-    // --- 1. LÓGICA DE LIMPAR TUDO ---
-    if ('clear_all' in data && data.clear_all) {
-        await marketListService.clearList(waId);
-        return { task: "market", status: "SUCCESS", action: "clear_all" };
+    // LOG 2: O que entendemos após o parse?
+    console.log("🛒 [MARKET PARSED]:", JSON.stringify(data, null, 2));
+
+    let actionConfirmedMessage = "";
+
+    // 2. LÓGICA DE EXECUÇÃO
+
+    // --- LIMPAR TUDO ---
+    if ("clear_all" in data && (data as ClearData).clear_all) {
+      console.log("🛒 [MARKET ACTION] Limpando lista...");
+      await marketListService.clearList(waId);
+      actionConfirmedMessage = "Sua lista de compras foi limpa.";
     }
 
-    // --- 2. LÓGICA DE LISTAR ---
-    if ('list_all' in data && data.list_all) {
-        const listItems = await marketListService.getList(waId);
-        if (listItems.length === 0) {
-            return { task: "market", status: "SUCCESS", action: "list", message: "Sua lista de compras está vazia." };
-        }
-        return { task: "market", status: "SUCCESS", action: "list", items: listItems };
-    }
-    
-    // --- 3. LÓGICA DE EXCLUIR UM ITEM ---
-    if ('delete' in data && data.delete && data.item_name) {
-        const deleteResult = await marketListService.removeItemByName(waId, data.item_name);
-        if (deleteResult.deleted_count > 0) {
-            return { task: "market", status: "SUCCESS", action: "delete", item_name: data.item_name, deleted_count: deleteResult.deleted_count };
-        }
-        throw new Error(`Item '${data.item_name}' não encontrado para exclusão.`);
+    // --- LISTAR ---
+    else if ("list_all" in data && (data as ListData).list_all) {
+      console.log("🛒 [MARKET ACTION] Listando itens...");
+      const listItems = await marketListService.getList(waId);
+      if (listItems.length === 0) {
+        actionConfirmedMessage = "Sua lista de compras está vazia.";
+      } else {
+        const listText = listItems
+          .map((item) => `${item.quantity}x ${item.item_name}`)
+          .join(", ");
+        actionConfirmedMessage = `Sua lista de compras contém: ${listText}.`;
+      }
     }
 
-    // --- 4. LÓGICA DE ADICIONAR (Se for um Array de itens) ---
-    if (Array.isArray(data) && data.length > 0) {
-      const addedItems = await marketListService.addMultipleItemsToList(waId, data as MarketItem[]);
-
-      return {
-        task: "market",
-        status: "SUCCESS",
-        action: "add",
-        items: addedItems.map((item) => ({
-          name: item.item_name,
-          quantity: item.quantity,
-        })),
-      };
+    // --- EXCLUIR ITEM ---
+    else if (
+      "delete" in data &&
+      (data as DeleteData).delete &&
+      (data as DeleteData).item_name
+    ) {
+      const itemToDelete = (data as DeleteData).item_name;
+      console.log(`🛒 [MARKET ACTION] Deletando item: ${itemToDelete}`);
+      const deleteResult = await marketListService.removeItemByName(
+        waId,
+        itemToDelete
+      );
+      actionConfirmedMessage = `Removido: ${itemToDelete}.`;
     }
 
-    // --- 5. NENHUMA INTENÇÃO VÁLIDA ---
-    return { task: "market", status: "NOT_APPLICABLE" }; 
+    // --- ADICIONAR (ARRAY) ---
+    else if (Array.isArray(data) && data.length > 0) {
+      console.log("🛒 [MARKET ACTION] Adicionando Itens:", data);
+      const itemsToAdd = data as MarketItem[];
 
+      const addedItems = await marketListService.addMultipleItemsToList(
+        waId,
+        itemsToAdd
+      );
+
+      const addedText = addedItems
+        .map((item) => `${item.quantity}x ${item.item_name}`)
+        .join(", ");
+      console.log("🛒 [MARKET SUCCESS] Itens salvos no DB:", addedText);
+
+      actionConfirmedMessage = `Adicionado à lista: ${addedText}.`;
+    }
+
+    // --- FALHA/IGNORADO ---
+    else {
+      console.log("🛒 [MARKET SKIP] Nenhuma ação válida identificada no JSON.");
+    }
+
+    if (!actionConfirmedMessage) {
+      return "";
+    }
+
+    // 3. RESPOSTA FINAL
+    return await aiService.generatePersonaResponse(
+      `Confirme esta ação de mercado de forma amigável: "${actionConfirmedMessage}"`,
+      fullMessage,
+      userConfig
+    );
   } catch (error: any) {
-    // Retorno Técnico de FALHA (Incluindo a lógica de AUTH)
-    return {
-      task: "market",
-      status: "FAILURE",
-      reason: error.message.includes("AUTH_REQUIRED")
-        ? "AUTH_REQUIRED"
-        : "DB_ERROR",
-      detail: error.message,
-    };
+    console.error(`❌ [MARKET ERROR]:`, error);
+    return `Tive um erro ao acessar a lista: ${error.message}`;
   }
 }

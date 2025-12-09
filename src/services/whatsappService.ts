@@ -1,92 +1,138 @@
 import axios from "axios";
 import fs from "fs";
 import path from "path";
+import FormData from "form-data";
 import { v4 as uuidv4 } from "uuid";
+import * as elevenLabsService from "./elevenLabsService";
+import * as aiService from "./aiService";
 
-// --- CONFIGURAÇÕES DE ENVIO ---
-// Configure estas variáveis de ambiente no seu .env
-const WHATSAPP_API_URL = process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0"; // URL base
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; 
-const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID; // Seu "798010456726495"
+const WHATSAPP_API_URL =
+  process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const DEFAULT_VOICE_ID = process.env.DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
-// --- 1. FUNÇÃO DE ENVIO DE TEXTO (CORREÇÃO FINAL) ---
+const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
+  const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/media`;
+  const form = new FormData();
+  form.append("file", fs.createReadStream(filePath));
+  form.append("type", "audio/mpeg");
+  form.append("messaging_product", "whatsapp");
 
-/**
- * Envia uma mensagem de texto simples para um destinatário usando a API do WhatsApp Business Cloud.
- * @param recipientWaId O número de telefone do destinatário (ID do WhatsApp).
- * @param messageText O conteúdo da mensagem a ser enviada.
- */
+  const uploadRes = await axios.post(url, form, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      ...form.getHeaders(),
+    },
+  });
+
+  const mediaId = uploadRes.data.id;
+
+  await axios.post(
+    `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to: recipientWaId,
+      type: "audio",
+      audio: { id: mediaId },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+  );
+
+  fs.unlinkSync(filePath);
+};
+
 export const sendTextMessage = async (
   recipientWaId: string,
-  messageText: string
+  messageText: string,
+  options?: { userConfig?: any; userOriginalMessage?: string }
 ): Promise<void> => {
   if (!WHATSAPP_API_URL || !WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    console.error("❌ Variáveis de ambiente do WhatsApp não configuradas para envio.");
+    console.error("❌ Variáveis de ambiente do WhatsApp não configuradas.");
     return;
   }
 
   try {
-    const payload = {
-      messaging_product: "whatsapp",
-      to: recipientWaId,
-      type: "text",
-      text: {
-        preview_url: false,
-        body: messageText,
-      },
-    };
+    let shouldSendAudio = false;
 
-    // Endpoint de envio: https://graph.facebook.com/v19.0/PHONE_NUMBER_ID/messages
-    await axios.post(
-      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json",
-        },
+    // --- LÓGICA DE DECISÃO DE ÁUDIO ---
+    if (options?.userConfig?.ai_send_audio) {
+      const wordCount = messageText.split(/\s+/).length;
+      const userMsg = options.userOriginalMessage?.toLowerCase() || "";
+
+      // CORREÇÃO: Regex mais agressiva para detectar pedido de texto
+      // Pega: "manda escrito", "quero ler", "em texto", "escreve", "escrito por favor"
+      const askedForText = userMsg.match(
+        /(escreva|escreve|escrito|texto|listar|lista|leia|ler|lendo)/i
+      );
+
+      const isListResponse = (messageText.match(/•|- /g) || []).length > 2;
+
+      // Só manda áudio se for curto, se não for lista e se o usuário NÃO pediu texto
+      if (wordCount <= 70 && !askedForText && !isListResponse) {
+        shouldSendAudio = true;
       }
-    );
-    
-    console.log(`💬 Mensagem enviada para ${recipientWaId}: ${messageText.substring(0, 50)}...`);
+    }
 
+    if (shouldSendAudio) {
+      console.log(`🎙️ Decisão: Enviar ÁUDIO para ${recipientWaId}`);
+      const speechText = await aiService.normalizeForSpeech(messageText);
+      const voiceId = options?.userConfig?.agent_voice_id || DEFAULT_VOICE_ID;
+      const audioPath = await elevenLabsService.generateAudio(
+        speechText,
+        voiceId
+      );
+      await sendAudioMessage(recipientWaId, audioPath);
+    } else {
+      const payload = {
+        messaging_product: "whatsapp",
+        to: recipientWaId,
+        type: "text",
+        text: { preview_url: false, body: messageText },
+      };
+
+      await axios.post(
+        `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      console.log(`💬 Decisão: Enviar TEXTO para ${recipientWaId}`);
+    }
   } catch (error: any) {
-    console.error("Erro ao enviar mensagem pelo WhatsApp:", error.response?.data || error.message);
-    // Não lança exceção para não quebrar a execução superior.
+    console.error(
+      "Erro ao enviar mensagem:",
+      error.response?.data || error.message
+    );
+    if (
+      error.message.includes("ElevenLabs") ||
+      error.message.includes("upload")
+    ) {
+      console.log("⚠️ Fallback: Enviando texto devido a erro no áudio.");
+      await sendTextMessage(recipientWaId, messageText);
+    }
   }
 };
 
-
-// --- 2. FUNÇÃO DE DOWNLOAD DE MÍDIA (CÓDIGO ORIGINAL) ---
-
-/**
- * Baixa a mídia do WhatsApp (como áudio) usando o Token da API.
- * @param mediaIdOrUrl A URL de download da mídia fornecida pelo webhook do WhatsApp.
- * @returns O caminho local do arquivo baixado.
- */
 export const downloadWhatsAppMedia = async (
   mediaIdOrUrl: string
 ): Promise<string> => {
   try {
     if (!WHATSAPP_TOKEN) throw new Error("WHATSAPP_TOKEN não definido.");
-
-    // A URL de download da mídia já vem na notificação do webhook
     const response = await axios.get(mediaIdOrUrl, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
       responseType: "arraybuffer",
     });
-
     const fileName = `${uuidv4()}.ogg`;
     const filePath = path.join("uploads", fileName);
-
-    // Certifique-se de que a pasta 'uploads' existe antes de escrever
     if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
-    
     fs.writeFileSync(filePath, response.data);
-
     return filePath;
   } catch (error: any) {
-    console.error("Erro ao baixar mídia do WhatsApp:", error.message);
     throw new Error("Falha no download da mídia");
   }
 };

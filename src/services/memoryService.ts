@@ -1,5 +1,3 @@
-// src/services/memoryService.ts
-
 import { pool } from "../db";
 
 // Define a estrutura da mensagem que será armazenada
@@ -11,9 +9,9 @@ interface ChatMessage {
 // O tipo de dado que a coluna 'history' do banco vai armazenar
 type ConversationHistory = ChatMessage[];
 
-const MAX_MESSAGES = 10; // Limite de 10 mensagens (5 trocas) para o contexto
+const MAX_MESSAGES = 15; // Histórico geral salvo no banco
 
-// Função para garantir que a tabela exista (idealmente rodar na inicialização do server)
+// Função para garantir que a tabela exista
 export const setupMemoryTable = async () => {
   try {
     await pool.query(`
@@ -30,9 +28,7 @@ export const setupMemoryTable = async () => {
 };
 
 /**
- * Carrega o histórico de conversa de um usuário.
- * @param waId O ID do WhatsApp do usuário.
- * @returns Uma string formatada para o System Prompt do LLM.
+ * Carrega TODO o histórico disponível (Função Original - NÃO ALTERADA).
  */
 export async function loadHistory(waId: string): Promise<string> {
   const res = await pool.query(
@@ -41,12 +37,40 @@ export async function loadHistory(waId: string): Promise<string> {
   );
 
   if (res.rows.length === 0) {
-    return ""; // Sem histórico
+    return "";
   }
 
   const history: ConversationHistory = res.rows[0].history;
 
-  // Formata o histórico para ser injetado no System Prompt
+  return history
+    .map((msg) => `${msg.role.toUpperCase()}: ${msg.content}`)
+    .join("\n");
+}
+
+/**
+ * NOVO: Carrega apenas as últimas N mensagens.
+ * Usado para verificar contexto imediato (ex: respostas de Sim/Não).
+ */
+export async function loadRecentHistory(
+  waId: string,
+  limit: number
+): Promise<string> {
+  const res = await pool.query(
+    "SELECT history FROM chat_histories WHERE wa_id = $1",
+    [waId]
+  );
+
+  if (res.rows.length === 0) {
+    return "";
+  }
+
+  let history: ConversationHistory = res.rows[0].history;
+
+  // Fatia o array para pegar apenas os últimos 'limit' itens
+  if (history.length > limit) {
+    history = history.slice(history.length - limit);
+  }
+
   return history
     .map((msg) => `${msg.role.toUpperCase()}: ${msg.content}`)
     .join("\n");
@@ -54,9 +78,6 @@ export async function loadHistory(waId: string): Promise<string> {
 
 /**
  * Salva a troca de mensagens no histórico.
- * @param waId O ID do WhatsApp do usuário.
- * @param userMessage A mensagem que o usuário enviou.
- * @param assistantMessage A mensagem que o assistente respondeu.
  */
 export async function saveToHistory(
   waId: string,
@@ -67,25 +88,21 @@ export async function saveToHistory(
   try {
     await client.query("BEGIN");
 
-    // 1. Busca o histórico atual
     const res = await client.query(
-      "SELECT history FROM chat_histories WHERE wa_id = $1 FOR UPDATE", // LOCKS THE ROW
+      "SELECT history FROM chat_histories WHERE wa_id = $1 FOR UPDATE",
       [waId]
     );
 
     let history: ConversationHistory =
       res.rows.length > 0 ? res.rows[0].history : [];
 
-    // 2. Adiciona as novas mensagens
     history.push({ role: "user", content: userMessage });
     history.push({ role: "assistant", content: assistantMessage });
 
-    // 3. Mantém apenas as últimas N mensagens
     if (history.length > MAX_MESSAGES) {
       history = history.slice(history.length - MAX_MESSAGES);
     }
 
-    // 4. Salva (INSERT ou UPDATE)
     await client.query(
       `INSERT INTO chat_histories (wa_id, history, updated_at) 
              VALUES ($1, $2, NOW())
