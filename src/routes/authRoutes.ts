@@ -7,12 +7,14 @@ import {
   logout,
   connectGoogleForRegistration,
   googleCallbackForRegistration,
+  loginGoogle,
 } from "../controllers/authController";
 
 const router = Router();
 
 // Rotas de Autenticação Padrão
 router.post("/login", login);
+router.post("/google-login", loginGoogle);
 router.post("/refresh", refreshToken);
 router.post("/logout", logout);
 

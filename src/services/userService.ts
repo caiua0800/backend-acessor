@@ -13,6 +13,7 @@ interface UserData {
   agentGender?: string;
   agentVoiceId?: string;
   agentPersonality?: string[];
+  googleRefreshToken?: string; // <--- NOVO
 }
 
 // --- HELPER CRÍTICO: Formatação de Telefone (Reutilizável) ---
@@ -50,6 +51,7 @@ export const createNewUser = async (data: UserData) => {
   try {
     await client.query("BEGIN");
 
+    // 5. Cria o Usuário
     const userRes = await client.query(
       `INSERT INTO users (full_name, phone_number, email, password, created_at, updated_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -59,6 +61,7 @@ export const createNewUser = async (data: UserData) => {
 
     const userId = userRes.rows[0].id;
 
+    // 6. Cria as Configurações
     await client.query(
       `INSERT INTO user_configs (user_id, user_nickname, agent_nickname, agent_gender, agent_voice_id, agent_personality)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -72,8 +75,20 @@ export const createNewUser = async (data: UserData) => {
       ]
     );
 
+    // 7. CRÍTICO: Insere o token do Google se ele veio
+    if (data.googleRefreshToken) {
+        console.log("Integrando Google Refresh Token no cadastro.");
+        await client.query(
+            `INSERT INTO user_integrations (user_id, google_refresh_token, google_home_connected, updated_at)
+             VALUES ($1, $2, TRUE, NOW())`,
+            [userId, data.googleRefreshToken]
+        );
+    }
+    
+    // 8. Confirma a Transação
     await client.query("COMMIT");
 
+    // Retorna o usuário criado
     const finalUser = await client.query(
       `SELECT u.id, u.full_name, u.phone_number, u.email, uc.* FROM users u
          JOIN user_configs uc ON u.id = uc.user_id

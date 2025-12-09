@@ -19,11 +19,51 @@ interface LoginResponse {
 
 // Gera o JWT de acesso (Stateless)
 const generateAccessToken = (userId: string) => {
-    // CORREÇÃO: Mude de HZ_SECRET para JWT_SECRET
-    return jwt.sign({ sub: userId }, JWT_SECRET, { 
-      expiresIn: ACCESS_TOKEN_EXPIRY,
-    });
+  // CORREÇÃO: Mude de HZ_SECRET para JWT_SECRET
+  return jwt.sign({ sub: userId }, JWT_SECRET, {
+    expiresIn: ACCESS_TOKEN_EXPIRY,
+  });
+};
+
+export const loginUserWithGoogle = async (
+  email: string,
+  ipAddress: string,
+  userAgent: string
+): Promise<LoginResponse> => {
+  // A. Busca o usuário pelo e-mail verificado
+  const userRes = await pool.query("SELECT * FROM users WHERE email = $1", [
+    email.toLowerCase().trim(),
+  ]);
+
+  if (userRes.rows.length === 0) {
+    throw new Error("Usuário não encontrado. Crie sua conta primeiro.");
+  }
+
+  const user = userRes.rows[0];
+
+  // B. Cria Tokens (Reutiliza a lógica padrão)
+  const accessToken = generateAccessToken(user.id);
+  const refreshToken = uuidv4();
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+
+  // C. Salva Sessão
+  await pool.query(
+    `INSERT INTO user_sessions (user_id, refresh_token, ip_address, user_agent, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+    [user.id, refreshToken, ipAddress, userAgent, expiresAt]
+  );
+
+  return {
+    accessToken,
+    refreshToken,
+    user: {
+      id: user.id,
+      full_name: user.full_name,
+      email: user.email,
+    },
   };
+};
 
 // 1. LOGIN: Cria sessão e tokens
 export const loginUser = async (

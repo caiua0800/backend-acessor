@@ -42,54 +42,54 @@ export async function processAndOrchestrate(
 ): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
 
-  // NOVO: 1. CARREGA O HISTÓRICO DE CONVERSA DO DB PARA O DISPATCH
+  // 1. CARREGA O HISTÓRICO
   const chatHistoryText = await memoryService.loadHistory(waId);
 
-  // 2. PASSO DE DISPATCH: Identifica as intenções
-  // MODIFICADO: Passa o histórico para a função
+  // 2. PASSO DE DISPATCH
   const keywords = await aiService.identifyTasks(fullMessage, chatHistoryText); 
-  console.log(
-    `🤖 Agente Despachante identificou as tarefas: ${keywords.join(", ")}`
-  );
+  console.log(`🤖 Agente Despachante identificou as tarefas: ${keywords.join(", ")}`);
 
-  // 3. TRATAMENTO DA CONVERSA GERAL
-  const isGeneralConversation =
-    keywords.includes("general") || keywords.length === 0;
+  const isGeneralConversation = keywords.includes("general") || keywords.length === 0;
 
   if (isGeneralConversation) {
-    return generalSpecialist(context);
+    // 3. Roda General
+    const finalResponse = await generalSpecialist(context);
+    await memoryService.saveToHistory(waId, fullMessage, finalResponse);
+    return finalResponse;
   }
 
-  // 4. PASSO DE ORQUESTRAÇÃO PARALELA
-  // Filtra e executa apenas os especialistas necessários
+  // 4. ORQUESTRAÇÃO PARALELA
   const specialistPromises = keywords
     .filter((k) => specialistMap[k])
     .map((keyword) => specialistMap[keyword](context));
 
-  // Fallback de segurança (caso a keyword exista mas não esteja no mapa)
   if (specialistPromises.length === 0) {
-    return generalSpecialist(context);
+    const finalResponse = await generalSpecialist(context);
+    await memoryService.saveToHistory(waId, fullMessage, finalResponse);
+    return finalResponse;
   }
 
-  // Executa todos em paralelo e aguarda os resultados (que são strings)
   const results: string[] = await Promise.all(specialistPromises);
 
-  // 5. FILTRAGEM DE RESPOSTAS VÁLIDAS
+  // 5. FILTRAGEM
   const validResponses = results.filter((res) => typeof res === 'string' && res.length > 0);
 
-  // 6. TRATAMENTO DE FALHA GERAL
   if (validResponses.length === 0) {
-    return generalSpecialist(context);
+    const finalResponse = await generalSpecialist(context);
+    await memoryService.saveToHistory(waId, fullMessage, finalResponse);
+    return finalResponse;
   }
 
-  // 7. UNIFICAÇÃO (SUMMARIZER)
+  // 6. UNIFICAÇÃO
   const finalMessage = await aiService.summarizerResponse(
     validResponses,
     userConfig
   );
 
-  // 8. SALVA A RESPOSTA FINAL NO HISTÓRICO
+  // 7. SALVA HISTÓRICO
   await memoryService.saveToHistory(waId, fullMessage, finalMessage);
 
+  // CRÍTICO: Não enviamos a mensagem aqui, apenas a retornamos.
+  // O Controller é quem envia.
   return finalMessage;
 }

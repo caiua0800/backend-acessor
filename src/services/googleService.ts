@@ -9,14 +9,73 @@ const TIME_ZONE = "America/Sao_Paulo";
 // ============================================================================
 // 🔐 AUTENTICAÇÃO E OAUTH2
 // ============================================================================
+const DEFAULT_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
+// URL Específica para o Cadastro (troca de CODE por TOKEN)
+const REGISTRATION_REDIRECT_URI = process.env.GOOGLE_REG_REDIRECT_URI; 
 
-const createOAuthClient = () => {
+// const createOAuthClient = () => {
+//   return new google.auth.OAuth2(
+//     process.env.GOOGLE_CLIENT_ID,
+//     process.env.GOOGLE_CLIENT_SECRET,
+//     process.env.GOOGLE_REDIRECT_URI
+//   );
+// };
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+
+const createOAuthClient = (redirectUri?: string) => {
   return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
+    CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    redirectUri || DEFAULT_REDIRECT_URI 
   );
 };
+
+export const getGoogleAuthUrlRegistration = (state: string) => {
+  const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI); // <--- USA A URL DE CADASTRO
+  return oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/spreadsheets",
+    ],
+    state: state,
+  });
+};
+
+/**
+ * Valida o ID Token do Google e retorna o e-mail do usuário.
+ * @param idToken O token JWT emitido pelo Google após o login.
+ * @returns O e-mail verificado do usuário.
+ */
+export const verifyGoogleIdToken = async (idToken: string): Promise<string> => {
+  // Usamos a biblioteca google-auth-library para verificar o token
+  // Nota: A função getAuthenticatedClient usa a mesma biblioteca, mas em outro contexto
+  const client = new google.auth.OAuth2(CLIENT_ID);
+  
+  try {
+      const ticket = await client.verifyIdToken({
+          idToken: idToken,
+          audience: CLIENT_ID, // Deve bater com o seu Client ID
+      });
+      
+      const payload = ticket.getPayload();
+      
+      if (!payload || !payload.email || !payload.email_verified) {
+          throw new Error("Token do Google inválido ou e-mail não verificado.");
+      }
+      
+      return payload.email.toLowerCase(); // Retorna o e-mail normalizado
+
+  } catch (e: any) {
+      console.error("❌ Erro ao verificar Google ID Token:", e.message);
+      throw new Error("Falha na autenticação com o Google.");
+  }
+};
+
 
 // --- HELPER CRÍTICO: Retorna Cliente, ID do Usuário e TOKEN DE SYNC ---
 const getAuthenticatedClient = async (whatsappId: string) => {
@@ -84,16 +143,16 @@ export const getGoogleAuthUrl = (state: string) => { // <--- CORREÇÃO AQUI
   });
 };
 
-export const handleGoogleCallbackForRegistration = async (code: string) => { // <--- CORREÇÃO AQUI
-  const oauth2Client = createOAuthClient();
+export const handleGoogleCallbackForRegistration = async (code: string) => {
+  const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI); // <--- USA A URL DE CADASTRO
   
-  const { tokens } = await oauth2Client.getToken(code);
-
-  if (!tokens.refresh_token) {
-    throw new Error("O Google não forneceu um Refresh Token.");
+  try {
+      const { tokens } = await oauth2Client.getToken(code);
+      if (!tokens.refresh_token) throw new Error("O Google não forneceu um Refresh Token.");
+      return { refreshToken: tokens.refresh_token };
+  } catch (error) {
+      throw error;
   }
-
-  return { refreshToken: tokens.refresh_token };
 };
 
 export const handleCallback = async (code: string, whatsappId: string) => {
