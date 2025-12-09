@@ -1,10 +1,39 @@
-# app.yaml (Crie este arquivo na raiz do seu backend)
-name: backend-acessor
+# app.yaml
+
+# Nome da sua Aplicação
+name: whale-app # Use o nome do seu aplicativo na App Platform (whale-app)
+
+# Serviços (Seu backend)
 services:
-  - name: backend-acessor
-    buildpack: nodejs
-    # Adicione comandos de pré-build para instalar o ffmpeg
-    build_command: |
-      apt-get update && apt-get install -y ffmpeg && npm run build
+  - name: backend-acessor # O nome exato do seu componente (backend-acessor)
     
-    # ... (outras configurações como a porta 8080)
+    # 1. Buildpack do Node.js (Garante que ele use as libs certas)
+    buildpack: nodejs
+    
+    # 2. Comando de Pré-Build CRÍTICO
+    # Instala o ffmpeg e depois compila seu TypeScript
+    build_command: |
+      # Instala dependências do Linux (apt-get é o comando)
+      apt-get update -y && apt-get install -y ffmpeg
+      # Compila o TypeScript (o que era o seu npm run build)
+      npm run build
+      
+    # 3. Comando de Execução (Start Command)
+    # Roda o código compilado (o que era o seu npm run start)
+    run_command: npm run start
+    
+    # 4. Configuração de Porta
+    # A DigitalOcean expõe esta porta
+    http_port: 8080
+    
+    # 5. Configuração de Rede
+    # Faz com que a App Platform use o domínio dela e aponte para a porta 8080
+    routes:
+      - path: /
+      
+    # 6. Variáveis de Ambiente (Mantenha as mais críticas aqui se necessário)
+    # Recomendo deixar no painel da DO, mas este bloco é onde elas iriam.
+    # envs:
+    #   - key: WHATSAPP_TOKEN
+    #     scope: RUN_AND_BUILD_TIME
+    #     value: ${WHATSAPP_TOKEN}
