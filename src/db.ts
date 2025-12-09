@@ -3,33 +3,43 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 
+// Carrega as variáveis de ambiente, garantindo que o DB_CERT_CONTENT seja lido
 dotenv.config();
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL não definida no arquivo .env');
 }
 
-// Caminho para o certificado na raiz do projeto (backend/cert.crt)
-// O ".." serve para sair da pasta 'src' e ir para a raiz
-const certPath = path.join(__dirname, '..', 'cert.crt');
+// --- LÓGICA DE CARREGAMENTO DO CERTIFICADO ---
+let sslConfig: any = { 
+    rejectUnauthorized: true, // Sempre ativo para segurança
+};
 
-// Verificação de segurança: se o arquivo não existir, avisa e para.
-if (!fs.existsSync(certPath)) {
-    console.error(`❌ ERRO: Não encontrei o arquivo de certificado em: ${certPath}`);
-    console.error('Certifique-se de que o arquivo "cert.crt" está na pasta backend (junto com package.json).');
-    process.exit(1);
+// Opção A (Recomendada para Produção): Usar o conteúdo da variável de ambiente (Secret)
+if (process.env.DB_CERT_CONTENT) {
+    console.log('🔒 Conexão Segura: Usando conteúdo do certificado da variável de ambiente.');
+    sslConfig.ca = process.env.DB_CERT_CONTENT;
+} 
+// Opção B (Fallback para Desenvolvimento Local): Tenta ler o arquivo local
+else {
+    const certPath = path.join(__dirname, '..', 'cert.crt');
+    if (!fs.existsSync(certPath)) {
+        // Se não achou o arquivo E não tem a variável, o DB não vai funcionar.
+        console.error(`❌ ERRO CRÍTICO: Não encontrei o arquivo de certificado em: ${certPath}`);
+        console.error('Para deploy, por favor, defina a variável de ambiente DB_CERT_CONTENT.');
+        process.exit(1);
+    }
+    console.log('🔒 Conexão Segura: Usando arquivo "cert.crt" local.');
+    sslConfig.ca = fs.readFileSync(certPath).toString();
 }
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: true, // Segurança máxima ATIVADA
-    ca: fs.readFileSync(certPath).toString(), // Lê o conteúdo do seu cert.crt
-  }
+  ssl: sslConfig // Usa a configuração SSL que montamos
 });
 
 pool.on('error', (err) => {
   console.error('Erro inesperado no DB', err);
 });
 
-console.log('🔒 Conexão Segura (SSL) configurada com sucesso usando cert.crt');
+console.log('✅ Conexão com PostgreSQL configurada.');

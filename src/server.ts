@@ -49,7 +49,7 @@ app.use(
 app.use(express.json());
 
 // CRÍTICO: Usa a porta injetada pelo ambiente (DigitalOcean, Render, etc.) ou 3000
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; 
 
 // Configuração das Rotas
 app.use("/auth", authRoutes);
