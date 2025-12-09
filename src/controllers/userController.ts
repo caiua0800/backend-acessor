@@ -1,12 +1,14 @@
 import { Request, Response } from "express";
-import { createNewUser } from "../services/userService";
+import * as userService from "../services/userService";
+import { AuthRequest } from "../middlewares/authMiddleware"; // Assumindo este caminho
 
+// POST /users/create (Rota de cadastro - SEM PROTEÇÃO JWT)
 export const createUser = async (req: Request, res: Response) => {
   try {
     const {
       full_name,
-      email,          // <--- NOVO
-      password,       // <--- NOVO
+      email,
+      password,
       country_code,
       area_code,
       phone_number,
@@ -17,18 +19,20 @@ export const createUser = async (req: Request, res: Response) => {
       agent_personality,
     } = req.body;
 
-    // Validação dos campos obrigatórios
-    if (!full_name || !email || !password || !country_code || !area_code || !phone_number) {
-      return res.status(400).json({
-        error:
-          "Campos obrigatórios: full_name, email, password, country_code, area_code, phone_number",
-      });
+    if (
+      !full_name ||
+      !email ||
+      !password ||
+      !country_code ||
+      !area_code ||
+      !phone_number
+    ) {
+      return res.status(400).json({ error: "Campos obrigatórios faltando." });
     }
 
-    // Passa todos os dados para o serviço
-    const newUser = await createNewUser({
+    const newUser = await userService.createNewUser({
       fullName: full_name,
-      email: email,       
+      email: email,
       password: password,
       countryCode: country_code,
       areaCode: area_code,
@@ -46,25 +50,67 @@ export const createUser = async (req: Request, res: Response) => {
       user: newUser,
     });
   } catch (e: any) {
-    // Tratamento de erro de duplicidade (Postgres Error 23505)
+    // Tratamento de erro de duplicidade (23505)
     if (e.code === "23505") {
-      // Verifica qual constraint violou para dar msg melhor
-      if (e.detail && e.detail.includes("email")) {
-        return res.status(409).json({
-            error: "Este e-mail já está cadastrado.",
-        });
-      }
-      if (e.detail && e.detail.includes("phone_number")) {
-        return res.status(409).json({
-            error: "Este número de telefone já está cadastrado.",
-        });
-      }
-      
-      return res.status(409).json({
-        error: "Dados duplicados (e-mail ou telefone).",
-      });
+      return res
+        .status(409)
+        .json({ error: "E-mail ou telefone já cadastrado." });
     }
-    // Outros erros
+    res.status(500).json({ error: e.message });
+  }
+};
+
+// PUT /users/phone (Rota protegida - USA JWT)
+export const updatePhone = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!; // Pega o ID do Token
+    const { country_code, area_code, phone_number } = req.body;
+
+    if (!country_code || !area_code || !phone_number) {
+      return res
+        .status(400)
+        .json({ error: "Todos os campos do telefone são obrigatórios." });
+    }
+
+    const updated = await userService.updatePhoneNumber(
+      userId,
+      country_code,
+      area_code,
+      phone_number
+    );
+
+    res.json({
+      status: "success",
+      message: "Telefone atualizado com sucesso.",
+      user: updated,
+    });
+  } catch (e: any) {
+    // Erro de duplicidade no update
+    if (e.message.includes("já está sendo usado")) {
+      return res.status(409).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message });
+  }
+};
+
+// PATCH /users/config (Rota protegida - USA JWT)
+export const updateConfig = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!; // Pega o ID do Token
+    const dataToUpdate = req.body; // Aceita userNickname, ai_send_audio, etc.
+
+    const updated = await userService.updateUserConfigs(userId, dataToUpdate);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Configurações não encontradas." });
+    }
+
+    res.json({
+      status: "success",
+      message: "Configurações atualizadas com sucesso.",
+      config: updated,
+    });
+  } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 };

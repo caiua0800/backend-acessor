@@ -1,28 +1,25 @@
-import { Router } from 'express';
-import * as controller from '../controllers/marketListController';
+import { Router } from "express";
+import * as controller from "../controllers/marketListController";
+import { authenticateToken } from "../middlewares/authMiddleware";
 
 const router = Router();
 
-// Define as rotas e associa cada uma a uma função do controller
+// Aplica autenticação a todas as rotas
+router.use(authenticateToken);
 
-// GET /market-list/
-// Rota para buscar a lista de compras completa do usuário
-router.get('/', controller.get);
+// 1. LISTAR TUDO (GET /market-list)
+router.get("/", controller.get);
 
-// POST /market-list/add
-// Rota para adicionar um novo item à lista
-router.post('/add', controller.add);
+// 2. ADICIONAR ITEM(S) (POST /market-list)
+router.post("/", controller.add);
 
-// PUT /market-list/:itemId
-// Rota para atualizar a quantidade de um item específico (passando o ID na URL)
-router.put('/:itemId', controller.update);
+// 3. ATUALIZAR QUANTIDADE (PUT /market-list/:itemId)
+router.put("/:itemId", controller.update);
 
-// DELETE /market-list/clear
-// Rota para apagar todos os itens da lista de uma vez
-router.delete('/clear', controller.clear);
+// 4. REMOVER UM ITEM (DELETE /market-list/:itemId)
+router.delete("/:itemId", controller.remove);
 
-// DELETE /market-list/:itemId
-// Rota para remover um item específico da lista (passando o ID na URL)
-router.delete('/:itemId', controller.remove);
+// 5. APAGAR TUDO (DELETE /market-list/clear)
+router.delete("/clear", controller.clear);
 
 export default router;

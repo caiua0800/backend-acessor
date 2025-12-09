@@ -1,29 +1,42 @@
 import { Request, Response } from "express";
-import { listEmails, readEmail } from "../services/googleService";
-import { getAuthUrl } from "../services/googleService";
+import * as googleService from "../services/googleService";
+import { AuthRequest } from "../middlewares/authMiddleware";
+import { getAuthUrlFallback } from "./calendarController"; // Reutiliza o helper de fallback
 
-export const list = async (req: Request, res: Response) => {
+// GET /gmail/list?query=
+export const listEmails = async (req: AuthRequest, res: Response) => {
   try {
-    const { wa_id, query } = req.body;
-    const emails = await listEmails(wa_id, query);
-    res.json({ emails });
+    const waId = await googleService.getWhatsappIdFromUserId(req.userId!);
+    const query = (req.query.query as string) || "is:unread"; // Padrão: não lidos
+
+    const emails = await googleService.listEmails(waId, query);
+    res.json(emails);
   } catch (e: any) {
-    if (e.message === "AUTH_REQUIRED") {
+    if (e.message.includes("AUTH_REQUIRED")) {
       return res.json({
         status: "auth_required",
-        authUrl: getAuthUrl(req.body.wa_id),
+        authUrl: await getAuthUrlFallback(req),
       });
     }
     res.status(500).json({ error: e.message });
   }
 };
 
-export const read = async (req: Request, res: Response) => {
+// GET /gmail/read/:messageId
+export const readEmail = async (req: AuthRequest, res: Response) => {
   try {
-    const { wa_id, message_id } = req.body;
-    const emailContent = await readEmail(wa_id, message_id);
-    res.json({ email: emailContent });
+    const waId = await googleService.getWhatsappIdFromUserId(req.userId!);
+    const messageId = req.params.messageId;
+
+    const email = await googleService.readEmail(waId, messageId);
+    res.json(email);
   } catch (e: any) {
+    if (e.message.includes("AUTH_REQUIRED")) {
+      return res.json({
+        status: "auth_required",
+        authUrl: await getAuthUrlFallback(req),
+      });
+    }
     res.status(500).json({ error: e.message });
   }
 };

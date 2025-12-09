@@ -31,7 +31,7 @@ export const read = async (req: Request, res: Response) => {
     handleAuthError(e, req, res);
   }
 };
-
+ 
 export const append = async (req: Request, res: Response) => {
   try {
     const { wa_id, sheetId, values } = req.body;

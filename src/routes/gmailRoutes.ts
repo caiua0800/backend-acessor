@@ -1,7 +1,16 @@
 import { Router } from "express";
-import { list, read } from "../controllers/gmailController";
+import { authenticateToken } from "../middlewares/authMiddleware";
+import { listEmails, readEmail } from "../controllers/gmailController";
 
 const router = Router();
-router.post("/list", list);
-router.post("/read", read);
+
+// Protege todas as rotas
+router.use(authenticateToken);
+
+// LISTAR EMAILS: GET /gmail/list?query=
+router.get("/list", listEmails);
+
+// LER UM EMAIL: GET /gmail/read/:messageId
+router.get("/read/:messageId", readEmail);
+
 export default router;

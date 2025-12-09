@@ -108,3 +108,89 @@ export const listAllAnnotations = async (whatsappId: string) => {
   );
   return res.rows;
 };
+
+// ============================================================================
+// 📱 FUNÇÕES PARA API / CONTROLLER (VIA USER ID / TOKEN)
+// ============================================================================
+
+// 1. SALVAR (COM CRIPTOGRAFIA)
+export const saveAnnotationByUserId = async (
+  userId: string,
+  data: AnnotationData
+) => {
+  const titleLower = data.title.trim();
+  const encryptedContent = { encrypted: encryptData(data.content) };
+
+  const check = await pool.query(
+    "SELECT id FROM user_annotations WHERE user_id = $1 AND title ILIKE $2",
+    [userId, titleLower]
+  );
+
+  if (check.rows.length > 0) {
+    // Atualiza
+    const res = await pool.query(
+      `UPDATE user_annotations 
+       SET content_json = $1, updated_at = NOW(), category = $2
+       WHERE id = $3
+       RETURNING *`,
+      [encryptedContent, data.category, check.rows[0].id]
+    );
+    return { action: "updated", item: res.rows[0] };
+  } else {
+    // Cria novo
+    const res = await pool.query(
+      `INSERT INTO user_annotations (user_id, title, category, content_json)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [userId, data.title, data.category, encryptedContent]
+    );
+    return { action: "created", item: res.rows[0] };
+  }
+};
+
+// 2. BUSCAR (COM DESCRIPTOGRAFIA)
+export const searchAnnotationsByUserId = async (userId: string, query: string) => {
+  const term = `%${query.trim()}%`;
+
+  const res = await pool.query(
+    `SELECT title, category, content_json 
+     FROM user_annotations 
+     WHERE user_id = $1 
+     AND (
+        title ILIKE $2 
+        OR category ILIKE $2
+     )
+     LIMIT 5`,
+    [userId, term]
+  );
+
+  const decryptedRows = res.rows.map((row) => {
+    if (row.content_json && row.content_json.encrypted) {
+      return {
+        ...row,
+        content_json: decryptData(row.content_json.encrypted),
+      };
+    }
+    return row;
+  });
+
+  return decryptedRows;
+};
+
+// 3. LISTAR TUDO
+export const listAllAnnotationsByUserId = async (userId: string) => {
+  const res = await pool.query(
+    "SELECT id, title, category FROM user_annotations WHERE user_id = $1 ORDER BY category, title",
+    [userId]
+  );
+  return res.rows;
+};
+
+// 4. DELETAR POR ID (Para ser mais específico na API)
+export const deleteAnnotationById = async (userId: string, annotationId: string) => {
+  const res = await pool.query(
+    "DELETE FROM user_annotations WHERE user_id = $1 AND id = $2",
+    [userId, annotationId]
+  );
+  return (res.rowCount ?? 0) > 0;
+};

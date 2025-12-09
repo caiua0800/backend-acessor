@@ -68,6 +68,34 @@ export const getAuthUrl = (whatsappId: string) => {
   });
 };
 
+export const getGoogleAuthUrl = (state: string) => { // <--- CORREÇÃO AQUI
+  const oauth2Client = createOAuthClient();
+  return oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/spreadsheets",
+    ],
+    state: state,
+  });
+};
+
+export const handleGoogleCallbackForRegistration = async (code: string) => { // <--- CORREÇÃO AQUI
+  const oauth2Client = createOAuthClient();
+  
+  const { tokens } = await oauth2Client.getToken(code);
+
+  if (!tokens.refresh_token) {
+    throw new Error("O Google não forneceu um Refresh Token.");
+  }
+
+  return { refreshToken: tokens.refresh_token };
+};
+
 export const handleCallback = async (code: string, whatsappId: string) => {
   const oauth2Client = createOAuthClient();
   const cleanWaId = whatsappId.trim().replace(/\D/g, "");
@@ -608,4 +636,16 @@ export const readEmail = async (waId: string, msgId: string) => {
     subject: h?.find((x) => x.name === "Subject")?.value,
     body: body.substring(0, 2000),
   };
+};
+
+
+export const getWhatsappIdFromUserId = async (userId: string): Promise<string> => {
+  const res = await pool.query(
+      "SELECT phone_number FROM users WHERE id = $1",
+      [userId]
+  );
+  if (res.rows.length === 0) {
+      throw new Error("Usuário não encontrado.");
+  }
+  return res.rows[0].phone_number;
 };

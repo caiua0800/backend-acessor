@@ -1,9 +1,12 @@
 import { Request, Response } from "express";
-import { addInvestment, listInvestments } from "../services/financeService";
+import * as financeService from "../services/financeService";
+import { AuthRequest } from "../middlewares/authMiddleware";
 
-export const add = async (req: Request, res: Response) => {
+// POST /investments
+export const add = async (req: AuthRequest, res: Response) => {
   try {
-    const { wa_id, asset_name, amount } = req.body;
+    const userId = req.userId!; // Pega o ID do Token
+    const { asset_name, amount } = req.body;
 
     if (!asset_name || !amount) {
       return res
@@ -11,20 +14,25 @@ export const add = async (req: Request, res: Response) => {
         .json({ error: "Campos 'asset_name' e 'amount' são obrigatórios." });
     }
 
-    const result = await addInvestment(wa_id, asset_name, amount);
-    res.json(result);
+    // Chama a função ByUserId
+    const result = await financeService.addInvestmentByUserId(
+      userId,
+      asset_name,
+      amount
+    );
+    res.status(201).json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 };
 
-export const list = async (req: Request, res: Response) => {
+// GET /investments
+export const list = async (req: AuthRequest, res: Response) => {
   try {
-    const { wa_id } = req.body;
-    if (!wa_id) {
-      return res.status(400).json({ error: "Campo 'wa_id' é obrigatório." });
-    }
-    const investments = await listInvestments(wa_id);
+    const userId = req.userId!; // Pega o ID do Token
+
+    // Chama a função ByUserId
+    const investments = await financeService.listInvestmentsByUserId(userId);
     res.json(investments);
   } catch (e: any) {
     res.status(500).json({ error: e.message });

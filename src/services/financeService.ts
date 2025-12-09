@@ -28,6 +28,10 @@ const getUserId = async (whatsappId: string) => {
   return res.rows[0].id;
 };
 
+// ============================================================================
+// 🤖 FUNÇÕES PARA O BOT (VIA WHATSAPP ID)
+// ============================================================================
+
 // --- 2. CONFIGURAR PERFIL ---
 export const setFinanceSettings = async (
   whatsappId: string,
@@ -37,7 +41,59 @@ export const setFinanceSettings = async (
   currency: string = "BRL"
 ) => {
   const userId = await getUserId(whatsappId);
+  return setFinanceSettingsByUserId(
+    userId,
+    income,
+    limit,
+    currentBalance,
+    currency
+  );
+};
 
+// --- 3. ADICIONAR TRANSAÇÃO ---
+export const addTransaction = async (whatsappId: string, data: any) => {
+  const userId = await getUserId(whatsappId);
+  return addTransactionByUserId(userId, data);
+};
+
+// --- 4. RELATÓRIO COMPLETO ---
+export const getFinanceReport = async (whatsappId: string) => {
+  const userId = await getUserId(whatsappId);
+  return getFinanceReportByUserId(userId);
+};
+
+// --- 5. LISTAR ÚLTIMAS TRANSAÇÕES ---
+export const getLastTransactions = async (whatsappId: string, limit = 10) => {
+  const userId = await getUserId(whatsappId);
+  return getLastTransactionsByUserId(userId, limit);
+};
+
+// --- 6. INVESTIMENTOS ---
+export const addInvestment = async (
+  whatsappId: string,
+  assetName: string,
+  amount: any
+) => {
+  const userId = await getUserId(whatsappId);
+  return addInvestmentByUserId(userId, assetName, amount);
+};
+
+export const listInvestments = async (whatsappId: string) => {
+  const userId = await getUserId(whatsappId);
+  return listInvestmentsByUserId(userId);
+};
+
+// ============================================================================
+// 📱 FUNÇÕES PARA A API / CONTROLLER (VIA USER ID / TOKEN)
+// ============================================================================
+
+export const setFinanceSettingsByUserId = async (
+  userId: string,
+  income: any,
+  limit: any,
+  currentBalance: any,
+  currency: string = "BRL"
+) => {
   const checkRes = await pool.query(
     `SELECT estimated_monthly_income, spending_limit, current_account_amount 
      FROM finance_settings WHERE user_id = $1`,
@@ -91,10 +147,7 @@ export const setFinanceSettings = async (
   return "Configurações salvas.";
 };
 
-// --- 3. ADICIONAR TRANSAÇÃO ---
-export const addTransaction = async (whatsappId: string, data: any) => {
-  const userId = await getUserId(whatsappId);
-
+export const addTransactionByUserId = async (userId: string, data: any) => {
   const amountVal = Math.abs(parseMoney(data.amount));
   const type = data.type ? data.type.toLowerCase().trim() : "expense";
 
@@ -109,7 +162,6 @@ export const addTransaction = async (whatsappId: string, data: any) => {
   if (isNaN(transactionDate.getTime())) transactionDate = new Date();
 
   const createdAt = new Date();
-
   const client = await pool.connect();
 
   try {
@@ -176,10 +228,7 @@ export const addTransaction = async (whatsappId: string, data: any) => {
   }
 };
 
-// --- 4. RELATÓRIO COMPLETO (AGREGADO) ---
-export const getFinanceReport = async (whatsappId: string) => {
-  const userId = await getUserId(whatsappId);
-
+export const getFinanceReportByUserId = async (userId: string) => {
   const settingsRes = await pool.query(
     "SELECT * FROM finance_settings WHERE user_id = $1",
     [userId]
@@ -229,10 +278,10 @@ export const getFinanceReport = async (whatsappId: string) => {
   };
 };
 
-// --- 5. LISTAR ÚLTIMAS TRANSAÇÕES (NOVO) ---
-export const getLastTransactions = async (whatsappId: string, limit = 10) => {
-  const userId = await getUserId(whatsappId);
-
+export const getLastTransactionsByUserId = async (
+  userId: string,
+  limit = 10
+) => {
   const res = await pool.query(
     `SELECT amount, type, category, description, transaction_date 
      FROM transactions 
@@ -247,19 +296,16 @@ export const getLastTransactions = async (whatsappId: string, limit = 10) => {
     type: row.type,
     category: row.category,
     description: row.description,
-    date: row.transaction_date, // Objeto Date
+    date: row.transaction_date,
   }));
 };
 
-// --- 6. INVESTIMENTOS ---
-export const addInvestment = async (
-  whatsappId: string,
+export const addInvestmentByUserId = async (
+  userId: string,
   assetName: string,
   amount: any
 ) => {
-  const userId = await getUserId(whatsappId);
   const amountVal = parseMoney(amount);
-
   if (amountVal <= 0) throw new Error("Valor inválido.");
 
   const res = await pool.query(
@@ -272,9 +318,7 @@ export const addInvestment = async (
   return { message: "Investimento registrado!", investment: res.rows[0] };
 };
 
-export const listInvestments = async (whatsappId: string) => {
-  const userId = await getUserId(whatsappId);
-
+export const listInvestmentsByUserId = async (userId: string) => {
   const res = await pool.query(
     `SELECT asset_name, SUM(amount) as total_invested, COUNT(*) as contributions
        FROM investments WHERE user_id = $1 GROUP BY asset_name ORDER BY total_invested DESC`,

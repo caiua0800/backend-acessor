@@ -27,6 +27,7 @@ import gymRoutes from "./routes/gymRoutes"; // Adicionei o gymRoutes aqui caso t
 import { setupMemoryTable } from "./services/memoryService";
 import { processNotificationQueue } from "./services/notificationService";
 import todoRoutes from "./routes/todoRoutes";
+import vaultRoutes from "./routes/vaultRoutes";
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use("/drive", driveRoutes);
 app.use("/test", testRoutes);
 app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
+app.use('/vault', vaultRoutes);
 
 async function startServer() {
   if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");

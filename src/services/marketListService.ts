@@ -1,6 +1,7 @@
 // src/services/marketListService.ts
 import { pool } from "../db";
 
+// Helper interno para o BOT
 const getUserId = async (whatsappId: string) => {
   const res = await pool.query("SELECT id FROM users WHERE phone_number = $1", [
     whatsappId,
@@ -18,11 +19,6 @@ const addSingleItem = async (
 ) => {
   const normalizedItemName = itemName.trim().toLowerCase();
 
-  // LOG DB
-  console.log(
-    `🛒 [DB INSERT] User: ${userId} | Item: ${normalizedItemName} | Qty: ${quantity}`
-  );
-
   const res = await client.query(
     `INSERT INTO market_list_items (user_id, item_name, quantity)
        VALUES ($1, $2, $3)
@@ -38,15 +34,56 @@ const addSingleItem = async (
   return res.rows[0];
 };
 
+// ============================================================================
+// 🤖 FUNÇÕES PARA O BOT (VIA WHATSAPP ID) - MANTIDAS
+// ============================================================================
+
 export const updateItemQuantity = async (
   whatsappId: string,
   itemId: string,
   newQuantity: number
 ) => {
   const userId = await getUserId(whatsappId);
+  return updateItemQuantityByUserId(userId, itemId, newQuantity);
+};
 
+export const removeItemFromList = async (
+  whatsappId: string,
+  itemId: string
+) => {
+  const userId = await getUserId(whatsappId);
+  return removeItemFromListByUserId(userId, itemId);
+};
+
+export const clearList = async (whatsappId: string) => {
+  const userId = await getUserId(whatsappId);
+  return clearListByUserId(userId);
+};
+
+export const getList = async (whatsappId: string) => {
+  const userId = await getUserId(whatsappId);
+  return getListByUserId(userId);
+};
+
+export const addMultipleItemsToList = async (
+  whatsappId: string,
+  items: { itemName: string; quantity: number }[]
+) => {
+  const userId = await getUserId(whatsappId);
+  return addMultipleItemsToListByUserId(userId, items);
+};
+
+// ============================================================================
+// 📱 FUNÇÕES PARA A API / CONTROLLER (VIA USER ID / TOKEN)
+// ============================================================================
+
+export const updateItemQuantityByUserId = async (
+  userId: string,
+  itemId: string,
+  newQuantity: number
+) => {
   if (newQuantity <= 0) {
-    return removeItemFromList(whatsappId, itemId);
+    return removeItemFromListByUserId(userId, itemId);
   }
 
   const res = await pool.query(
@@ -59,11 +96,10 @@ export const updateItemQuantity = async (
   return res.rows[0];
 };
 
-export const removeItemFromList = async (
-  whatsappId: string,
+export const removeItemFromListByUserId = async (
+  userId: string,
   itemId: string
 ) => {
-  const userId = await getUserId(whatsappId);
   const res = await pool.query(
     "DELETE FROM market_list_items WHERE id = $1 AND user_id = $2",
     [itemId, userId]
@@ -74,26 +110,7 @@ export const removeItemFromList = async (
   };
 };
 
-export const removeItemByName = async (
-  whatsappId: string,
-  itemName: string
-) => {
-  const userId = await getUserId(whatsappId);
-  const normalizedItemName = itemName.trim().toLowerCase();
-
-  const res = await pool.query(
-    "DELETE FROM market_list_items WHERE user_id = $1 AND item_name ILIKE $2",
-    [userId, `%${normalizedItemName}%`]
-  );
-
-  return {
-    message: "Item removido.",
-    deleted_count: res.rowCount ?? 0,
-  };
-};
-
-export const clearList = async (whatsappId: string) => {
-  const userId = await getUserId(whatsappId);
+export const clearListByUserId = async (userId: string) => {
   const res = await pool.query(
     "DELETE FROM market_list_items WHERE user_id = $1 RETURNING id",
     [userId]
@@ -104,8 +121,7 @@ export const clearList = async (whatsappId: string) => {
   };
 };
 
-export const getList = async (whatsappId: string) => {
-  const userId = await getUserId(whatsappId);
+export const getListByUserId = async (userId: string) => {
   const res = await pool.query(
     "SELECT id, item_name, quantity, checked FROM market_list_items WHERE user_id = $1 ORDER BY created_at ASC",
     [userId]
@@ -113,20 +129,16 @@ export const getList = async (whatsappId: string) => {
   return res.rows;
 };
 
-// Função Principal de Adição
-export const addMultipleItemsToList = async (
-  whatsappId: string,
+export const addMultipleItemsToListByUserId = async (
+  userId: string,
   items: { itemName: string; quantity: number }[]
 ) => {
-  const userId = await getUserId(whatsappId);
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
-
-    // LOG DE INÍCIO
     console.log(
-      `🛒 [SERVICE] Iniciando adição de ${items.length} itens para ${whatsappId}`
+      `🛒 [SERVICE] Iniciando adição de ${items.length} itens para o User ID: ${userId}`
     );
 
     const results = [];
@@ -149,4 +161,23 @@ export const addMultipleItemsToList = async (
   } finally {
     client.release();
   }
+};
+
+// Funções que o bot usa e que não precisam ser duplicadas na API
+export const removeItemByName = async (
+  whatsappId: string,
+  itemName: string
+) => {
+  const userId = await getUserId(whatsappId);
+  const normalizedItemName = itemName.trim().toLowerCase();
+
+  const res = await pool.query(
+    "DELETE FROM market_list_items WHERE user_id = $1 AND item_name ILIKE $2",
+    [userId, `%${normalizedItemName}%`]
+  );
+
+  return {
+    message: "Item removido.",
+    deleted_count: res.rowCount ?? 0,
+  };
 };

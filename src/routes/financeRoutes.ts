@@ -1,7 +1,22 @@
 import { Router } from "express";
-import { updateSettings, add, report } from "../controllers/financeController";
+import { authenticateToken } from "../middlewares/authMiddleware";
+import {
+  updateSettings,
+  add,
+  report,
+  listTransactions,
+  getInvestments,
+} from "../controllers/financeController";
+
 const router = Router();
+
+// Protege tudo com Login
+router.use(authenticateToken);
+
 router.post("/settings", updateSettings);
-router.post("/add", add);
-router.post("/report", report);
+router.post("/transaction", add); // ou só "/" se preferir
+router.get("/report", report);
+router.get("/transactions", listTransactions); // GET /finance/transactions
+router.get("/investments", getInvestments); // GET /finance/investments
+
 export default router;

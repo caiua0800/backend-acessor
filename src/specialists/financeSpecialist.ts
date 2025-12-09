@@ -16,6 +16,9 @@ interface FinanceIntention {
   currency?: string;
   items?: any[];
   export_format?: "sheet" | "doc";
+
+  // CORREÇÃO CRÍTICA AQUI: Adicionando o campo 'date'
+  date?: string;
 }
 
 function cleanJsonOutput(rawOutput: string): string {
@@ -53,22 +56,21 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     - "add_investment": Investimentos.
     - "configure_settings": Definir Renda, Limite ou Saldo.
     - "list_report": Ver relatórios no chat.
-    - "export_report": Criar planilha/doc ("Gere uma planilha", "Manda no docs").
+    - "export_report": Criar planilha/doc.
 
     REGRAS DE EXTRAÇÃO:
-    1. FLUXO: "Juntei mais 30 mil" -> "add_transaction" (income).
-    2. ESTADO: "Tenho 30 mil na conta" -> "configure_settings".
-    3. EXPORTAR: "Cria uma planilha de gastos" -> "export_report", "export_format": "sheet".
-
+    1. VALOR, TIPO E DATA SÃO PRIORIDADE.
+    2. DESCRIÇÃO: Extraia o máximo de detalhes possível sobre O QUE FOI PAGO ou O QUE FOI RECEBIDO e a DATA. (Ex: "jantar com a namorada dia 5").
+    3. FLUXO: "Gastei 170" -> "add_transaction" (expense).
+    
     RESPOSTA OBRIGATÓRIA (JSON PURO):
     {
       "intent": "...",
-      "export_format": "sheet" | "doc" | null,
-      "monthly_income": "...",
-      "spending_limit": "...",
-      "current_balance": "...",
-      "amount": "...",
-      "type": "..."
+      "amount": "valor",
+      "type": "income ou expense",
+      "description": "Detalhe da transação e data/dia", 
+      "category": "Categoria (se mencionada)",
+      "date": "YYYY-MM-DD" 
     }
   `;
 
@@ -81,16 +83,17 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     const data: FinanceIntention = JSON.parse(jsonString);
 
     const intent = data.intent || "unknown";
-    console.log("🔍 [FINANCE DEBUG] Dados:", {
+    console.log("🔍 [FINANCE DEBUG] Dados Extraídos (Partial):", {
       intent,
-      export: data.export_format,
+      amount: data.amount,
+      description: data.description,
+      date: data.date,
     });
 
     let actionConfirmedMessage = "";
     let isNewInvestment = false;
     let initialSetupComplete = false;
 
-    // 2. BUSCA O ESTADO ATUAL
     const currentReport = await financeService.getFinanceReport(waId);
     const isConfigured =
       currentReport.config.limite_estipulado > 0 ||
@@ -153,6 +156,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
             type: data.type,
             description: data.description,
             category: data.category,
+            date: data.date, // <--- Agora o TypeScript não reclama
           },
         ];
       }
@@ -163,13 +167,14 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
 
         for (const item of transactionsToProcess) {
           if (!item.amount) continue;
+
           await financeService.addTransaction(waId, {
             amount: item.amount,
             type: item.type,
             category:
               item.category || (item.type === "income" ? "Entrada" : "Geral"),
             description: item.description || "",
-            date: new Date().toISOString(),
+            date: item.date, // <--- Agora o TypeScript não reclama
           });
           const val = financeService.parseMoney(item.amount);
           if (item.type === "income") totalIncome += val;
@@ -204,14 +209,9 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
           const sheetTitle = `Relatório Financeiro - ${dateStr}`;
           const sheet = await googleService.createSheet(waId, sheetTitle);
 
-          // CORREÇÃO CRÍTICA: Verificação de ID nulo
-          if (!sheet.id) {
-            throw new Error(
-              "Erro: O Google não retornou o ID da planilha criada."
-            );
-          }
+          if (!sheet.id)
+            throw new Error("Erro: O Google não retornou o ID da planilha.");
 
-          // Agora o TypeScript sabe que sheet.id é string
           await googleService.appendToSheet(waId, sheet.id, [
             "DATA",
             "TIPO",
@@ -225,7 +225,6 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
             const tType = t.type === "income" ? "Entrada" : "Saída";
             const tVal = t.amount.toString().replace(".", ",");
 
-            // Garante que campos opcionais sejam strings vazias, não undefined
             const tCategory = t.category || "-";
             const tDesc = t.description || "-";
 

@@ -270,3 +270,168 @@ export const updateGoalDetails = async (
 
   return res.rows[0];
 };
+
+// =================================================================
+// 📱 FUNÇÕES PARA A API / CONTROLLER (VIA USER ID / TOKEN)
+// =================================================================
+
+// 1. CRIAR META
+export const createGoalByUserId = async (
+  userId: string,
+  data: GoalCreationData
+) => {
+  const targetAmount = parseMoney(data.target_amount);
+
+  if (targetAmount <= 0)
+    throw new Error("O valor da meta deve ser maior que zero.");
+  const deadlineValue =
+    data.deadline && data.deadline.trim() !== "" ? data.deadline : null;
+
+  const res = await pool.query(
+    `INSERT INTO goals 
+     (user_id, goal_name, target_amount, metric_unit, category, deadline, details_json)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      userId,
+      data.goal_name,
+      targetAmount,
+      data.metric_unit || "Unid",
+      data.category || "Geral",
+      deadlineValue,
+      data.details_json || {},
+    ]
+  );
+  return res.rows[0];
+};
+
+// 2. ATUALIZAR PROGRESSO
+export const updateGoalProgressByUserId = async (
+  userId: string,
+  goalId: string, // Aqui o Controller deve mandar o ID, não o Nome
+  amount: any,
+  description?: string,
+  sourceTransactionId?: string
+) => {
+  // Nota: Se a API for enviar o NOME, você precisa da função de busca 'getGoalByName' aqui
+  // Por enquanto, assumimos que o Controller manda o ID.
+  const progressAmount = parseMoney(amount);
+
+  if (progressAmount === 0)
+    throw new Error("O valor do progresso não pode ser zero.");
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // A. Atualiza o valor na meta
+    const updateRes = await client.query(
+      `UPDATE goals 
+       SET current_progress = current_progress + $1, updated_at = NOW()
+       WHERE id = $2 AND user_id = $3
+       RETURNING *`,
+      [progressAmount, goalId, userId]
+    );
+
+    if ((updateRes.rowCount ?? 0) === 0)
+      throw new Error("Meta não encontrada.");
+    const updatedGoal = updateRes.rows[0];
+
+    // B. Registra histórico
+    await client.query(
+      `INSERT INTO goals_progress (goal_id, amount, description, source_transaction_id)
+       VALUES ($1, $2, $3, $4)`,
+      [goalId, progressAmount, description || null, sourceTransactionId || null]
+    );
+
+    await client.query("COMMIT");
+
+    const target = parseFloat(updatedGoal.target_amount);
+    const current = parseFloat(updatedGoal.current_progress);
+
+    return {
+      ...updatedGoal,
+      target_amount: target,
+      current_progress: current,
+      progress_percent: target > 0 ? ((current / target) * 100).toFixed(1) : 0,
+      progress_description: description,
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
+// 3. LISTAR METAS
+export const listGoalsByUserId = async (userId: string) => {
+  const res = await pool.query(
+    `SELECT * FROM goals WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId]
+  );
+
+  const goalsWithHistoryPromises = res.rows.map(async (row) => {
+    const history = await getGoalProgressHistory(row.id); // Reutiliza o helper
+    const target = parseFloat(row.target_amount);
+    const progress = parseFloat(row.current_progress);
+
+    return {
+      ...row,
+      target_amount: target,
+      current_progress: progress,
+      progress_percent: target > 0 ? ((progress / target) * 100).toFixed(2) : 0,
+      is_completed: progress >= target,
+      progress_history: history,
+    };
+  });
+
+  return Promise.all(goalsWithHistoryPromises);
+};
+
+// 4. ATUALIZAR DETALHES
+export const updateGoalDetailsByUserId = async (
+  userId: string,
+  goalId: string, // Aqui usamos o ID da meta
+  data: Partial<GoalCreationData>
+) => {
+  const fields = [];
+  const values = [];
+  let queryIndex = 1;
+
+  if (data.goal_name) {
+    fields.push(`goal_name = $${queryIndex++}`);
+    values.push(data.goal_name);
+  }
+  if (data.target_amount) {
+    fields.push(`target_amount = $${queryIndex++}`);
+    values.push(parseMoney(data.target_amount));
+  }
+  if (data.metric_unit) {
+    fields.push(`metric_unit = $${queryIndex++}`);
+    values.push(data.metric_unit);
+  }
+  if (data.deadline) {
+    fields.push(`deadline = $${queryIndex++}`);
+    values.push(data.deadline);
+  }
+  if (data.details_json) {
+    fields.push(`details_json = details_json || $${queryIndex++}`);
+    values.push(data.details_json);
+  }
+
+  if (fields.length === 0)
+    throw new Error("Nenhum campo fornecido para atualização.");
+
+  fields.push("updated_at = NOW()");
+  values.push(goalId, userId);
+
+  const res = await pool.query(
+    `UPDATE goals SET ${fields.join(" , ")} 
+     WHERE id = $${queryIndex++} AND user_id = $${queryIndex++} 
+     RETURNING *`,
+    values
+  );
+  return res.rows[0];
+};
