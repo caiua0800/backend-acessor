@@ -5,7 +5,7 @@ import FormData from "form-data";
 import { v4 as uuidv4 } from "uuid";
 import * as elevenLabsService from "./elevenLabsService";
 import * as aiService from "./aiService";
-// import ffmpeg from "fluent-ffmpeg"; // FFmpeg não é mais necessário aqui
+import ffmpeg from "fluent-ffmpeg";
 
 const WHATSAPP_API_URL =
   process.env.WHATSAPP_API_URL || "https://graph.facebook.com/v19.0";
@@ -13,21 +13,16 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const DEFAULT_VOICE_ID = process.env.DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
-// --- FUNÇÃO AUXILIAR PARA ENVIAR ÁUDIO (USANDO OGG/OPUS) ---
 const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
   const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/media`;
   const form = new FormData();
   form.append("file", fs.createReadStream(filePath));
-  // MIME Type CORRETO para áudio de voz
+  // CRÍTICO: O MIME Type deve ser audio/ogg
   form.append("type", "audio/ogg");
   form.append("messaging_product", "whatsapp");
 
-  let mediaId: string | null = null;
-  const messageUrl = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
-
   try {
     // 1. Upload do arquivo
-    console.log(`📡 [Upload] Tentando upload do arquivo: ${filePath}`);
     const uploadRes = await axios.post(url, form, {
       headers: {
         Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -35,17 +30,11 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
       },
     });
 
-    mediaId = uploadRes.data.id;
-    console.log(`✅ [Upload] Sucesso. Media ID obtido: ${mediaId}`);
-    
-    if (!mediaId) {
-        throw new Error("O upload foi bem-sucedido, mas o media ID não foi retornado.");
-    }
+    const mediaId = uploadRes.data.id;
 
     // 2. Envio da mensagem de áudio (Referenciando o ID)
-    console.log(`✉️ [Envio] Tentando enviar mensagem com Media ID: ${mediaId}`);
     await axios.post(
-      messageUrl,
+      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
       {
         messaging_product: "whatsapp",
         to: recipientWaId,
@@ -54,31 +43,12 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
       },
       { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
     );
-    console.log(`🎉 [Envio] Mensagem de áudio enviada com sucesso para ${recipientWaId}.`);
-
-  } catch (error: any) {
-    // Captura erros de rede ou de resposta da API
-    if (error.response) {
-      console.error(`❌ [ERRO WHATSAPP] Status: ${error.response.status}`);
-      console.error(`❌ [ERRO WHATSAPP] Data:`, error.response.data);
-      console.error(`❌ [ERRO WHATSAPP] Endpoint: ${mediaId ? 'Mensagem' : 'Upload'}`);
-    } else {
-      console.error("❌ [ERRO GERAL] Falha na requisição Axios:", error.message);
-    }
-    // Rejoga o erro para que a função sendTextMessage possa fazer o fallback
-    throw new Error(`Falha no envio do áudio (Media ID: ${mediaId}): ${error.message}`);
-
   } finally {
     // Limpeza (sempre garantir que o arquivo no servidor seja deletado)
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`🧹 Arquivo temporário deletado: ${filePath}`);
-    }
-    // Se o upload foi feito, mas o envio falhou, o mediaId será limpo pelo WhatsApp
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 };
 
-// --- FUNÇÃO INTELIGENTE DE ENVIO ---
 export const sendTextMessage = async (
   recipientWaId: string,
   messageText: string,
@@ -97,14 +67,15 @@ export const sendTextMessage = async (
       const wordCount = messageText.split(/\s+/).length;
       const userMsg = options.userOriginalMessage?.toLowerCase() || "";
 
-      // Pega: "manda escrito", "quero ler", "em texto", "escreve", "escrito"
+      // CORREÇÃO: Regex mais agressiva para detectar pedido de texto
+      // Pega: "manda escrito", "quero ler", "em texto", "escreve", "escrito por favor"
       const askedForText = userMsg.match(
-        /(escreva|escreve|escrito|texto|listar|lista|leia|ler|lendo|mande escrito)/i
+        /(escreva|escreve|escrito|texto|listar|lista|leia|ler|lendo)/i
       );
 
-      // Vê se a resposta tem muitos bullet points (lista)
       const isListResponse = (messageText.match(/•|- /g) || []).length > 2;
 
+      // Só manda áudio se for curto, se não for lista e se o usuário NÃO pediu texto
       if (wordCount <= 70 && !askedForText && !isListResponse) {
         shouldSendAudio = true;
       }
@@ -112,20 +83,14 @@ export const sendTextMessage = async (
 
     if (shouldSendAudio) {
       console.log(`🎙️ Decisão: Enviar ÁUDIO para ${recipientWaId}`);
-
       const speechText = await aiService.normalizeForSpeech(messageText);
       const voiceId = options?.userConfig?.agent_voice_id || DEFAULT_VOICE_ID;
-
-      // Chama a função que agora retorna OGG/Opus
-      const oggPath = await elevenLabsService.generateAudio(
+      const audioPath = await elevenLabsService.generateAudio(
         speechText,
         voiceId
       );
-
-      // Apenas envia o arquivo OGG/Opus diretamente
-      await sendAudioMessage(recipientWaId, oggPath);
+      await sendAudioMessage(recipientWaId, audioPath);
     } else {
-      // --- ENVIO PADRÃO DE TEXTO ---
       const payload = {
         messaging_product: "whatsapp",
         to: recipientWaId,
@@ -150,16 +115,36 @@ export const sendTextMessage = async (
       "Erro ao enviar mensagem:",
       error.response?.data || error.message
     );
-    // O Fallback agora só precisa checar se houve erro no ElevenLabs
-    if (error.message.includes("Falha ao gerar áudio.")) {
-      console.log("⚠️ Fallback: Enviando texto devido a erro na API de áudio.");
-      // Chama recursivo sem options para forçar o envio de texto
+    if (
+      error.message.includes("ElevenLabs") ||
+      error.message.includes("upload")
+    ) {
+      console.log("⚠️ Fallback: Enviando texto devido a erro no áudio.");
       await sendTextMessage(recipientWaId, messageText);
     }
   }
 };
 
-// ... (Mantenha o downloadWhatsAppMedia igual)
+const convertAudioToOggOpus = (inputPath: string): Promise<string> => {
+  const outputPath = path.join("uploads", `${uuidv4()}.ogg`);
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .toFormat("ogg") // Formato Ogg
+      .audioCodec("libopus") // Codec Opus (CRÍTICO para WhatsApp)
+      .on("error", (err) => {
+        console.error("❌ FFmpeg Erro na Transcodificação:", err.message);
+        reject(new Error("FFmpeg falhou ao converter áudio."));
+      })
+      .on("end", () => {
+        // Limpa o arquivo MP3 original
+        fs.unlinkSync(inputPath);
+        resolve(outputPath);
+      })
+      .save(outputPath);
+  });
+};
+
 export const downloadWhatsAppMedia = async (
   mediaIdOrUrl: string
 ): Promise<string> => {
