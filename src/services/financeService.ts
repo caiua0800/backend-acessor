@@ -1,3 +1,4 @@
+import moment from "moment";
 import { pool } from "../db";
 
 // --- 1. FUNÇÃO DE PARSING INTELIGENTE ---
@@ -338,4 +339,133 @@ export const listInvestmentsByUserId = async (userId: string) => {
       aportes: parseInt(row.contributions),
     })),
   };
+};
+
+export const addRecurringTransactionByUserId = async (userId: string, data: any) => {
+  const amountVal = Math.abs(parseMoney(data.amount));
+  const type = data.type ? data.type.toLowerCase().trim() : "expense";
+  
+  // Se o dia não for informado, usa o dia atual
+  let day = data.day_of_month ? parseInt(data.day_of_month) : moment().date();
+  if (day < 1) day = 1;
+  if (day > 31) day = 31;
+
+  const res = await pool.query(
+    `INSERT INTO recurring_transactions 
+     (user_id, amount, type, category, description, day_of_month)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      userId,
+      amountVal,
+      type,
+      data.category || (type === "income" ? "Entrada Fixa" : "Gasto Fixo"),
+      data.description || "Recorrência",
+      day
+    ]
+  );
+
+  return res.rows[0];
+};
+
+// 2. PROCESSAR RECORRÊNCIAS DO DIA (CRON JOB)
+export const processDailyRecurringTransactions = async () => {
+  const client = await pool.connect();
+  // Garante fuso horário correto para não rodar no dia errado
+  const today = moment().tz("America/Sao_Paulo");
+  const currentDay = today.date();
+  const currentMonthStr = today.format("YYYY-MM"); // Ex: 2023-12
+
+  console.log(`🔄 [CRON FINANCEIRO] Buscando contas fixas para o dia ${currentDay}...`);
+
+  try {
+    // Busca tudo que vence hoje, está ativo, E AINDA NÃO FOI PROCESSADO ESTE MÊS
+    const res = await client.query(
+      `SELECT * FROM recurring_transactions 
+       WHERE day_of_month = $1 
+       AND active = TRUE
+       AND (last_processed_at IS NULL OR TO_CHAR(last_processed_at, 'YYYY-MM') != $2)`,
+      [currentDay, currentMonthStr]
+    );
+
+    if (res.rows.length === 0) {
+      console.log("✅ [CRON FINANCEIRO] Nenhuma conta fixa para processar hoje.");
+      return;
+    }
+
+    console.log(`💸 [CRON FINANCEIRO] Processando ${res.rows.length} itens...`);
+
+    for (const item of res.rows) {
+      try {
+        await client.query("BEGIN");
+
+        // --- LÓGICA DE SALDO (Cópia simplificada do addTransaction) ---
+        const settingsRes = await client.query(
+            `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
+            [item.user_id]
+        );
+        
+        let currentBalance = 0;
+        if (settingsRes.rows.length > 0) {
+            currentBalance = parseFloat(settingsRes.rows[0].current_account_amount || 0);
+        } else {
+            await client.query(
+                `INSERT INTO finance_settings (user_id, current_account_amount) VALUES ($1, 0)`,
+                [item.user_id]
+            );
+        }
+
+        const amountVal = parseFloat(item.amount);
+        const beforeAmount = currentBalance;
+        let afterAmount = currentBalance;
+
+        if (item.type === "income") afterAmount += amountVal;
+        else afterAmount -= amountVal;
+
+        // 1. Insere a transação no extrato
+        await client.query(
+          `INSERT INTO transactions 
+           (user_id, amount, type, category, description, transaction_date, before_account_amount, current_account_amount, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, NOW())`,
+          [
+            item.user_id,
+            amountVal,
+            item.type,
+            item.category,
+            `${item.description} (Automático)`, // Identificador
+            beforeAmount,
+            afterAmount
+          ]
+        );
+
+        // 2. Atualiza saldo do usuário
+        await client.query(
+            `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
+            [afterAmount, item.user_id]
+        );
+
+        // 3. Marca a recorrência como processada (para não rodar dnv hoje/este mês)
+        await client.query(
+            `UPDATE recurring_transactions SET last_processed_at = NOW() WHERE id = $1`,
+            [item.id]
+        );
+
+        await client.query("COMMIT");
+        console.log(`✅ Item ${item.id} (${item.description}) processado para User ${item.user_id}`);
+
+      } catch (err) {
+        await client.query("ROLLBACK");
+        console.error(`❌ Erro ao processar item recorrente ${item.id}:`, err);
+      }
+    }
+  } catch (e) {
+    console.error("❌ Erro fatal no Cron Financeiro:", e);
+  } finally {
+    client.release();
+  }
+};
+
+export const addRecurringTransaction = async (whatsappId: string, data: any) => {
+  const userId = await getUserId(whatsappId);
+  return addRecurringTransactionByUserId(userId, data);
 };

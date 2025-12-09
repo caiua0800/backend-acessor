@@ -95,6 +95,7 @@ export async function identifyTasks(
            - Compromissos com hora marcada que envolvem *estar em algum lugar* ou *reuniões*.
            - Verbos: "Agendar", "Marcar", "Reunião", "Consulta", "Call".
            - Ex: "Marca dentista amanhã", "Agenda reunião às 10h".
+           - **CRÍTICO: Se a última mensagem do assistente ofereceu um lembrete (ex: 'Quer que eu te mande um lembrete...?') e o usuário respondeu SIM/QUERO/MANDA, use 'calendar'.**
 
         5. **COFRE / ANOTAÇÕES (vault)**:
            - Senhas, chaves, logins, dados bancários (conta, pix), documentos.
@@ -224,8 +225,8 @@ export async function normalizeForSpeech(text: string): Promise<string> {
     Sua tarefa é reescrever o texto do usuário para que soe natural quando lido por um robô.
     
     REGRAS:
-    1. Números e Moedas: Escreva por extenso. (Ex: "R$ 50,00" -> "Cinquenta reais").
-    2. Links: Remova protocolos. (Ex: "https://google.com" -> "google ponto com").
+    1. LINKS/URLS: JAMAIS leia uma URL. Se houver um link (http/https), REMOVA-O completamente e substitua pela frase: "o link está aqui embaixo".
+    2. Números e Moedas: Escreva por extenso. (Ex: "R$ 50,00" -> "Cinquenta reais").
     3. Emojis: Remova TODOS os emojis.
     4. Formatação: Remova asteriscos (*), underlines (_) e caracteres especiais de formatação.
     5. Clareza: Se houver listas, transforme em texto corrido fluido.

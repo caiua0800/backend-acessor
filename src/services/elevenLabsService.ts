@@ -20,7 +20,7 @@ export const generateAudio = async (
       `${BASE_URL}/${voiceId}`,
       {
         text: text,
-        model_id: "eleven_multilingual_v2", // Melhor para PT-BR
+        model_id: "eleven_multilingual_v2",
         voice_settings: {
           stability: 0.5,
           similarity_boost: 0.75,
@@ -36,7 +36,9 @@ export const generateAudio = async (
     );
 
     if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
-    fs.writeFileSync(filePath, response.data);
+
+    // CORREÇÃO: Usar promises para não travar o Event Loop
+    await fs.promises.writeFile(filePath, response.data);
 
     return filePath;
   } catch (error: any) {

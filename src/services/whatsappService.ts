@@ -17,12 +17,10 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
   const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/media`;
   const form = new FormData();
   form.append("file", fs.createReadStream(filePath));
-  // CRÍTICO: O MIME Type deve ser audio/ogg
   form.append("type", "audio/ogg");
   form.append("messaging_product", "whatsapp");
 
   try {
-    // 1. Upload do arquivo
     const uploadRes = await axios.post(url, form, {
       headers: {
         Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -32,20 +30,20 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
 
     const mediaId = uploadRes.data.id;
 
-    // 2. Envio da mensagem de áudio (Referenciando o ID)
     await axios.post(
       `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
       {
         messaging_product: "whatsapp",
         to: recipientWaId,
         type: "audio",
-        audio: { id: mediaId }, // Sem caption, sem nome de arquivo
+        audio: { id: mediaId },
       },
       { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
     );
   } finally {
-    // Limpeza (sempre garantir que o arquivo no servidor seja deletado)
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    try {
+        if (fs.existsSync(filePath)) await fs.promises.unlink(filePath);
+    } catch (e) { console.error("Erro ao deletar arquivo temp:", e); }
   }
 };
 
@@ -61,21 +59,22 @@ export const sendTextMessage = async (
 
   try {
     let shouldSendAudio = false;
+    // Verifica se tem link na mensagem original
+    const hasLink =
+      messageText.includes("http://") || messageText.includes("https://");
 
     // --- LÓGICA DE DECISÃO DE ÁUDIO ---
     if (options?.userConfig?.ai_send_audio) {
       const wordCount = messageText.split(/\s+/).length;
       const userMsg = options.userOriginalMessage?.toLowerCase() || "";
 
-      // CORREÇÃO: Regex mais agressiva para detectar pedido de texto
-      // Pega: "manda escrito", "quero ler", "em texto", "escreve", "escrito por favor"
       const askedForText = userMsg.match(
         /(escreva|escreve|escrito|texto|listar|lista|leia|ler|lendo)/i
       );
 
       const isListResponse = (messageText.match(/•|- /g) || []).length > 2;
 
-      // Só manda áudio se for curto, se não for lista e se o usuário NÃO pediu texto
+      // Manda áudio se for curto e usuário não pediu texto
       if (wordCount <= 70 && !askedForText && !isListResponse) {
         shouldSendAudio = true;
       }
@@ -83,6 +82,8 @@ export const sendTextMessage = async (
 
     if (shouldSendAudio) {
       console.log(`🎙️ Decisão: Enviar ÁUDIO para ${recipientWaId}`);
+
+      // 1. Gera e envia o áudio (que agora vai ocultar o link graças ao aiService)
       const speechText = await aiService.normalizeForSpeech(messageText);
       const voiceId = options?.userConfig?.agent_voice_id || DEFAULT_VOICE_ID;
       const audioPath = await elevenLabsService.generateAudio(
@@ -90,12 +91,34 @@ export const sendTextMessage = async (
         voiceId
       );
       await sendAudioMessage(recipientWaId, audioPath);
+
+      // 2. SE TIVER LINK, MANDA O TEXTO TAMBÉM (Híbrido)
+      if (hasLink) {
+        console.log(`🔗 Link detectado. Enviando complemento de TEXTO.`);
+        const payload = {
+          messaging_product: "whatsapp",
+          to: recipientWaId,
+          type: "text",
+          text: { preview_url: true, body: messageText }, // preview_url true fica bonito
+        };
+        await axios.post(
+          `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+          payload,
+          {
+            headers: {
+              Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      }
     } else {
+      // Envio Apenas Texto (Padrão)
       const payload = {
         messaging_product: "whatsapp",
         to: recipientWaId,
         type: "text",
-        text: { preview_url: false, body: messageText },
+        text: { preview_url: true, body: messageText },
       };
 
       await axios.post(

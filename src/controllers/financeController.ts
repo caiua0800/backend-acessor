@@ -45,6 +45,31 @@ export const add = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// NOVO: POST /finance/recurring
+export const addRecurring = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const { amount, type, category, description, day_of_month } = req.body;
+
+    if (!amount || !day_of_month || !type) {
+      return res.status(400).json({
+        error: "Os campos 'amount', 'type' e 'day_of_month' são obrigatórios.",
+      });
+    }
+
+    const item = await financeService.addRecurringTransactionByUserId(userId, {
+      amount,
+      type,
+      category,
+      description,
+      day_of_month,
+    });
+    res.status(201).json({ status: "success", item });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
 // GET /finance/report
 export const report = async (req: AuthRequest, res: Response) => {
   try {
@@ -56,7 +81,7 @@ export const report = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// GET /finance/transactions (NOVO: Para listar extrato no front)
+// GET /finance/transactions (Para listar extrato no front)
 export const listTransactions = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
@@ -72,7 +97,7 @@ export const listTransactions = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// GET /finance/investments (NOVO: Para listar investimentos)
+// GET /finance/investments (Para listar investimentos)
 export const getInvestments = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;

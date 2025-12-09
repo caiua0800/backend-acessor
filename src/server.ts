@@ -27,6 +27,7 @@ import { setupMemoryTable } from "./services/memoryService";
 import { processNotificationQueue } from "./services/notificationService";
 import todoRoutes from "./routes/todoRoutes";
 import vaultRoutes from "./routes/vaultRoutes";
+import { processDailyRecurringTransactions } from "./services/financeService";
 
 const app = express();
 
@@ -71,23 +72,32 @@ app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
 app.use("/vault", vaultRoutes);
 
-// Funções de Inicialização Assíncrona (Serão chamadas após o app.listen)
 async function initializeServices() {
   try {
-    // 1. Conexão lenta com o DB (Roda no background)
+    // 1. Conexão lenta com o DB
     await setupMemoryTable();
     console.log("✅ Memória de chat configurada e pronta.");
 
-    // 2. CRON (Só deve iniciar depois do DB)
+    // 2. CRON DE NOTIFICAÇÕES (Minuto a minuto)
     cron.schedule("* * * * *", async () => {
       await processNotificationQueue().catch((e) =>
-        console.error("❌ Erro no Cron:", e)
+        console.error("❌ Erro no Cron Notificações:", e)
       );
     });
-    console.log("🕰️ Sistema de Notificações (Cron) ativado.");
+    
+
+    cron.schedule("0 6 * * *", async () => {
+        console.log("⏰ Iniciando verificação diária de gastos fixos...");
+        await processDailyRecurringTransactions().catch((e) => 
+            console.error("❌ Erro no Cron Financeiro:", e)
+        );
+    }, {
+        timezone: "America/Sao_Paulo" // Importante para garantir o dia certo
+    });
+
+    console.log("🕰️ Sistema de Crons (Notificação e Financeiro) ativado.");
   } catch (e) {
     console.error("💥 ERRO FATAL NA INICIALIZAÇÃO DE SERVIÇOS:", e);
-    // Não matamos o processo principal, mas paramos o CRON/Notificação.
   }
 }
 

@@ -1,3 +1,4 @@
+// src/specialists/calendarSpecialist.ts
 import * as googleService from "../services/googleService";
 import * as notificationService from "../services/notificationService";
 import * as aiService from "../services/aiService";
@@ -54,6 +55,11 @@ interface CountData {
   search_term: string;
   year?: number;
 }
+// NOVO: Interface para o novo Intent de confirmação
+interface ConfirmReminderData {
+  intent: "confirm_reminder";
+  search_term?: string;
+}
 
 type CalendarExtractionData =
   | EventData[]
@@ -64,7 +70,8 @@ type CalendarExtractionData =
   | CheckData
   | ReminderData
   | SyncData
-  | CountData;
+  | CountData
+  | ConfirmReminderData; // <--- Adiciona aqui
 
 // ============================================================================
 // 2. HELPERS
@@ -215,15 +222,24 @@ export async function calendarSpecialist(
     HISTÓRICO RECENTE: ${recentHistory}
     
     INTENÇÕES:
-    1. AGENDAR / MARCAR: "Marcar reunião X às 21:20".
-       - JSON: {"intent": "add_event", "summary": "Nome", "date": "YYYY-MM-DD", "time": "HH:mm"}
+    1. AGENDAR / CRIAR ("add_event"):
+       - Frases: "Marcar reunião", "Agendar médico", "Me lembra amanhã de acordar".
+       - REGRA CRÍTICA: Se o usuário diz "Me lembra [futuro] de [ação]", isso é CRIAR evento, NÃO buscar.
+       - JSON: {"intent": "add_event", "summary": "Título", "date": "YYYY-MM-DD", "time": "HH:mm"}
        
     2. SINCRONIZAR: "Integrar agenda". -> {"sync_calendar": true}
     3. CONTAR: "Quantas reuniões?". -> {"intent": "count_events", "search_term": "...", "year": 2025}
-    4. LEMBRETE: "Lembre da reunião X". -> {"intent": "add_reminder", "search_term": "X", "offset_minutes": 15}
-    5. LISTAR: {"list_all": true}
-    6. CANCELAR: {"delete": true, "search_term": "..."}
-    7. CHECAR: {"check_availability": true, ...}
+    
+    4. CONFIGURAR LEMBRETE EM EVENTO JÁ EXISTENTE ("add_reminder"):
+       - Frases: "Põe um alerta na reunião das 10", "Me avisa 15min antes do dentista".
+       - Use APENAS se for para adicionar notificação a algo que JÁ EXISTE.
+       - JSON: {"intent": "add_reminder", "search_term": "X", "offset_minutes": 15}
+       
+    5. CONFIRMAR OFERTA DE LEMBRETE ANTERIOR ("confirm_reminder"):
+       - Se o usuário respondeu SIM/QUERO/MANDA à *oferta de lembrete* feita pelo assistente.
+       - JSON: {"intent": "confirm_reminder"}
+       
+    6. LISTAR, CANCELAR, CHECAR (Padrão)
     
     Retorne APENAS o JSON.
   `;
@@ -308,7 +324,34 @@ export async function calendarSpecialist(
       }
     }
 
-    // 1. SINCRONIZAR
+    // NOVO: 1. CONFIRMAR LEMBRETE PENDENTE
+    else if (data.intent === "confirm_reminder") {
+      const events = await googleService.listEvents(waId);
+
+      // Encontra o evento futuro mais recente (assumindo que é o evento recém-criado)
+      const lastEvent = events.find((e: any) =>
+        moment(e.start).isAfter(moment())
+      );
+
+      if (lastEvent && lastEvent.start && userId) {
+        const time = new Date(lastEvent.start);
+        const min = 15; // Padrão 15 minutos
+
+        // Agendar Notificação
+        await notificationService.scheduleNotification(
+          userId,
+          `📅 Lembrete (Confirmação): "${lastEvent.summary}"`,
+          new Date(time.getTime() - min * 60000)
+        );
+
+        actionConfirmedMessage = `Combinado, ${userConfig.user_nickname}! Lembrete agendado para *${lastEvent.summary}* 15 minutos antes!`;
+      } else {
+        actionConfirmedMessage =
+          "Não achei um evento recente para configurar o lembrete. Qual evento você quer que eu te lembre?";
+      }
+    }
+
+    // 2. SINCRONIZAR
     else if (data.sync_calendar) {
       try {
         await whatsappService.sendTextMessage(waId, "⏳ Sincronizando...");
@@ -321,7 +364,7 @@ export async function calendarSpecialist(
       }
     }
 
-    // 2. LISTAR POR DATA
+    // 3. LISTAR POR DATA
     else if (data.intent === "list_events" && data.date) {
       const ev = await googleService.listEventsByDate(waId, data.date);
       actionConfirmedMessage = ev.length
@@ -333,7 +376,7 @@ export async function calendarSpecialist(
         : `Nada agendado para ${moment(data.date).format("DD/MM")}.`;
     }
 
-    // 3. CONTAR
+    // 4. CONTAR
     else if (data.intent === "count_events") {
       let count = await googleService.countEvents(
         waId,
@@ -357,7 +400,7 @@ export async function calendarSpecialist(
           : "Nenhum evento encontrado.";
     }
 
-    // 4. LEMBRETE
+    // 5. LEMBRETE
     else if (data.intent === "add_reminder") {
       const events = await googleService.listEvents(waId);
       if (!events.length) return "Agenda vazia.";
@@ -384,11 +427,12 @@ export async function calendarSpecialist(
           actionConfirmedMessage = `✅ Aviso agendado para "${target.summary}"!`;
         }
       } else {
-        actionConfirmedMessage = `⚠️ Não achei "${data.search_term}".`;
+        // LÓGICA DE FALLBACK PROATIVA
+        actionConfirmedMessage = `Não achei nada agendado como "${data.search_term}" para colocar alerta. Quer que eu agende isso como um novo compromisso?`;
       }
     }
 
-    // 5. DELETAR
+    // 6. DELETAR
     else if (data.delete) {
       const count = await googleService.deleteEvents(
         waId,
@@ -400,7 +444,7 @@ export async function calendarSpecialist(
         count > 0 ? `Cancelei ${count} evento(s).` : "Não achei eventos.";
     }
 
-    // 6. LISTAR TUDO
+    // 7. LISTAR TUDO
     else if (data.list_all) {
       const ev = await googleService.listEvents(waId);
       actionConfirmedMessage = ev.length
@@ -413,7 +457,7 @@ export async function calendarSpecialist(
         : "Agenda vazia.";
     }
 
-    // 7. CHECAR
+    // 8. CHECAR
     else if (data.check_availability) {
       const ev = await googleService.checkAvailability(
         waId,

@@ -36,7 +36,7 @@ export const processNotificationQueue = async () => {
        WHERE n.status = 'pending' 
        AND n.send_at <= NOW()
        FOR UPDATE SKIP LOCKED 
-       LIMIT 50`
+       LIMIT 15` 
     );
 
     if (res.rows.length === 0) return;

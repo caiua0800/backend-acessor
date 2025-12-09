@@ -9,8 +9,8 @@ export const convertToOpus = (
     ffmpeg(inputPath)
       .toFormat("ogg")
       .audioCodec("libopus")
-      .audioChannels(1) // <--- O SEGREDO ESTÁ AQUI (Força Mono)
-      .audioFrequency(48000) // (Opcional) Mantém qualidade alta
+      .audioChannels(1)
+      .audioFrequency(48000)
       .on("end", () => {
         resolve(outputPath);
       })
@@ -22,10 +22,13 @@ export const convertToOpus = (
   });
 };
 
-export const cleanupFiles = (paths: string[]) => {
-  paths.forEach((path) => {
-    if (fs.existsSync(path)) {
-      fs.unlinkSync(path); // Deleta síncrono para garantir
+// CORREÇÃO: Função assíncrona que não trava o bot
+export const cleanupFiles = async (paths: string[]) => {
+  for (const path of paths) {
+    try {
+      await fs.promises.access(path).then(() => fs.promises.unlink(path));
+    } catch (e) {
+      console.log(`Erro ao limpar os arquivos: ${e}`);
     }
-  });
+  }
 };
