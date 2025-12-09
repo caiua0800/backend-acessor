@@ -1,0 +1,10 @@
+# app.yaml (Crie este arquivo na raiz do seu backend)
+name: backend-acessor
+services:
+  - name: backend-acessor
+    buildpack: nodejs
+    # Adicione comandos de pré-build para instalar o ffmpeg
+    build_command: |
+      apt-get update && apt-get install -y ffmpeg && npm run build
+    
+    # ... (outras configurações como a porta 8080)
