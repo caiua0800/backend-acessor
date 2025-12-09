@@ -33,7 +33,7 @@ const app = express();
 // --- CONFIGURAÇÃO CORS PERMISSIVA (BLINDADA) ---
 app.use(
   cors({
-    origin: true, // Aceita a origem da requisição (reflects the request)
+    origin: true, // Aceita a origem da requisição
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
@@ -48,8 +48,8 @@ app.use(
 
 app.use(express.json());
 
-// CRÍTICO: Usa a porta injetada pelo ambiente (DigitalOcean, Render, etc.) ou 3000
-const PORT = process.env.PORT || 8080; 
+// CRÍTICO: Usa a porta 8080 para o Health Check do DigitalOcean/Render
+const PORT = process.env.PORT || 8080;
 
 // Configuração das Rotas
 app.use("/auth", authRoutes);
@@ -71,32 +71,41 @@ app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
 app.use("/vault", vaultRoutes);
 
-async function startServer() {
-  if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+// Funções de Inicialização Assíncrona (Serão chamadas após o app.listen)
+async function initializeServices() {
+  try {
+    // 1. Conexão lenta com o DB (Roda no background)
+    await setupMemoryTable();
+    console.log("✅ Memória de chat configurada e pronta.");
 
-  await setupMemoryTable();
-  console.log("✅ Memória de chat configurada e pronta."); // Log para ver se chegou aqui
-
-  await setupMemoryTable();
-
-  cron.schedule("* * * * *", async () => {
-    // console.log("⏰ Cron tick..."); // Descomente para debug
-    await processNotificationQueue();
-  });
-  console.log("🕰️ Sistema de Notificações (Cron) ativado.");
-
-  app.listen(PORT, () => {
-    // <--- Usa a porta dinâmica
-    console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    console.log(`✅ Memória de chat configurada e pronta.`);
-  });
+    // 2. CRON (Só deve iniciar depois do DB)
+    cron.schedule("* * * * *", async () => {
+      await processNotificationQueue().catch((e) =>
+        console.error("❌ Erro no Cron:", e)
+      );
+    });
+    console.log("🕰️ Sistema de Notificações (Cron) ativado.");
+  } catch (e) {
+    console.error("💥 ERRO FATAL NA INICIALIZAÇÃO DE SERVIÇOS:", e);
+    // Não matamos o processo principal, mas paramos o CRON/Notificação.
+  }
 }
 
+// --- LÓGICA PRINCIPAL (Começa a Escutar Imediatamente) ---
 (async () => {
   try {
-      await startServer();
+    // 1. Cria a pasta (Rápido e não depende de nada)
+    if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+
+    // 2. INICIA O SERVIDOR EXPRESS
+    app.listen(PORT, () => {
+      console.log(`🚀 Servidor rodando e RESPONDENDO na porta ${PORT}`);
+
+      // 3. Inicia os serviços lentos em SEGUNDO PLANO
+      initializeServices();
+    });
   } catch (e) {
-      console.error("💥 ERRO FATAL AO INICIAR SERVIDOR:", e);
-      process.exit(1); // Força a saída para o erro ser reportado
+    console.error("💥 ERRO FATAL AO INICIAR SERVIDOR:", e);
+    process.exit(1);
   }
 })();
