@@ -28,6 +28,7 @@ import { processNotificationQueue } from "./services/notificationService";
 import todoRoutes from "./routes/todoRoutes";
 import vaultRoutes from "./routes/vaultRoutes";
 import { processDailyRecurringTransactions } from "./services/financeService"; // Import já existente
+import studyRoutes from "./routes/studyRoutes";
 
 const app = express();
 
@@ -71,6 +72,7 @@ app.use("/test", testRoutes);
 app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
 app.use("/vault", vaultRoutes);
+app.use("/study", studyRoutes);
 
 async function initializeServices() {
   try {

@@ -70,7 +70,7 @@ export async function identifyTasks(
   const systemMessage = `
         Você é um Planejador de Tarefas (Dispatcher). Sua função é decidir quais especialistas ativar para a *última* mensagem do usuário.
         
-        KEYWORDS DISPONÍVEIS: 'calendar', 'email', 'finance', 'market', 'goals', 'ideas', 'files', 'vault', 'gym', 'todo', 'general'.
+        KEYWORDS DISPONÍVEIS: 'calendar', 'email', 'finance', 'market', 'goals', 'ideas', 'files', 'vault', 'gym', 'todo', 'study', 'general'.        
         
         ### REGRA DE OURO (EXCLUSÃO) ###
         - Se identificar uma intenção técnica clara (finance, todo, gym, etc.), **NÃO** inclua 'general'.
@@ -118,6 +118,10 @@ export async function identifyTasks(
 
         10. **CONVERSA CONTINUADA**:
            - Use o histórico abaixo para entender o contexto.
+           
+        11. **ESTUDO / PLANO DE ESTUDO (study)**:
+        - "Quero estudar", "Cadastrar matéria", "Plano de estudo", "Próximo passo", "Concluí".
+        - Priorize 'study' se houver qualquer menção a matéria, estudo, plano ou progresso de plano.
 
         ### HISTÓRICO DE CONVERSA ###
         ${chatHistory}

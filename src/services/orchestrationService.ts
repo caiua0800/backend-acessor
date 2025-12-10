@@ -17,6 +17,7 @@ import { vaultSpecialist } from "../specialists/vaultSpecialist";
 import { generalSpecialist } from "../specialists/generalSpecialist";
 import { gymSpecialist } from "../specialists/gymSpecialist";
 import { todoSpecialist } from "../specialists/todoSpecialist";
+import { studySpecialist } from "../specialists/studySpecialist";
 
 // Mapeamento de keywords para as funções de especialista
 // O retorno agora é Promise<string>
@@ -31,7 +32,7 @@ const specialistMap: Record<string, (context: UserContext) => Promise<string>> =
   vault: vaultSpecialist as (context: UserContext) => Promise<string>,
   gym: gymSpecialist as (context: UserContext) => Promise<string>,
   todo: todoSpecialist as (context: UserContext) => Promise<string>,
-
+  study: studySpecialist as (context: UserContext) => Promise<string>, 
 };
 
 // =================================================================
