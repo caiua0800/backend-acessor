@@ -101,12 +101,10 @@ export const searchTransactions = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
     
-    // Parâmetros de paginação
     const page = parseInt(req.query.page as string || '1');
     const limit = parseInt(req.query.limit as string || '20');
     const offset = (page - 1) * limit;
     
-    // Parâmetros de filtro
     const categoryFilter = req.query.category as string | undefined;
     const descriptionFilter = req.query.description as string | undefined;
 
