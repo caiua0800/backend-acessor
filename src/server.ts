@@ -1,8 +1,12 @@
+// src/server.ts
+
 import "dotenv/config"; // Garante que .env carregue primeiro
 import express from "express";
 import cors from "cors";
 import fs from "fs";
 import cron from "node-cron";
+import swaggerUi from "swagger-ui-express"; // NOVO: SWAGGER
+import YAML from "yamljs"; // NOVO: SWAGGER
 
 // Importa todas as suas rotas
 import authRoutes from "./routes/authRoutes";
@@ -21,21 +25,25 @@ import sheetsRoutes from "./routes/sheetsRoutes";
 import driveRoutes from "./routes/driveRoutes";
 import testRoutes from "./routes/testRoutes";
 import gymRoutes from "./routes/gymRoutes";
+import todoRoutes from "./routes/todoRoutes";
+import vaultRoutes from "./routes/vaultRoutes";
+import studyRoutes from "./routes/studyRoutes"; // NOVO: ROTAS DE ESTUDO
 
 // Importa serviços de inicialização
 import { setupMemoryTable } from "./services/memoryService";
 import { processNotificationQueue } from "./services/notificationService";
-import todoRoutes from "./routes/todoRoutes";
-import vaultRoutes from "./routes/vaultRoutes";
-import { processDailyRecurringTransactions } from "./services/financeService"; // Import já existente
-import studyRoutes from "./routes/studyRoutes";
+import { processDailyRecurringTransactions } from "./services/financeService";
 
 const app = express();
+
+// --- CONFIGURAÇÃO SWAGGER / OPENAPI ---
+// Carrega o arquivo de definição na raiz do projeto (swagger.yaml)
+const swaggerDocument = YAML.load("./swagger.yaml");
 
 // --- CONFIGURAÇÃO CORS PERMISSIVA (BLINDADA) ---
 app.use(
   cors({
-    origin: true, // Aceita a origem da requisição
+    origin: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
@@ -53,7 +61,26 @@ app.use(express.json());
 // CRÍTICO: Usa a porta 8080 para o Health Check do DigitalOcean/Render
 const PORT = process.env.PORT || 8080;
 
-// Configuração das Rotas
+// ===========================================
+// CONFIGURAÇÃO DAS ROTAS E MIDDLEWARE
+// ===========================================
+
+// 1. ROTAS DE DOCUMENTAÇÃO (SWAGGER UI)
+// Configura a interface visual do Swagger UI em /api-docs
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerDocument, {
+    // Personalização para dar o "estilo de IA"
+    customCss: ".swagger-ui .topbar { background-color: #3f51b5; }",
+    customSiteTitle: "AI Assistant Backend - Documentação API",
+    customfavIcon: "https://seulogo.com/favicon-ai.png",
+    customCssUrl:
+      "https://fonts.googleapis.com/css2?family=Roboto:wght@300;700&display=swap",
+  })
+);
+
+// 2. ROTAS DA APLICAÇÃO
 app.use("/auth", authRoutes);
 app.use("/calendar", calendarRoutes);
 app.use("/finance", financeRoutes);
@@ -72,7 +99,7 @@ app.use("/test", testRoutes);
 app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
 app.use("/vault", vaultRoutes);
-app.use("/study", studyRoutes);
+app.use("/study", studyRoutes); // <-- NOVO: ROTAS DE ESTUDO
 
 async function initializeServices() {
   try {
@@ -133,6 +160,9 @@ async function initializeServices() {
     // 2. INICIA O SERVIDOR EXPRESS
     app.listen(PORT, () => {
       console.log(`🚀 Servidor rodando e RESPONDENDO na porta ${PORT}`);
+      console.log(
+        `📑 Documentação Swagger disponível em http://localhost:${PORT}/api-docs`
+      );
 
       // 3. Inicia os serviços lentos em SEGUNDO PLANO
       initializeServices();

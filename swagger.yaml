@@ -1,0 +1,539 @@
+openapi: 3.0.0
+info:
+  title: AI Assistant Backend - Sua API de Produtividade
+  description: |
+    Documentação completa da API do seu Assistente Pessoal Inteligente.
+    
+    A maioria das rotas requer autenticação **Bearer Token** (JWT), obtido no endpoint `/auth/login`.
+
+    ### 🧠 Visão Geral dos Módulos
+    * **Auth/Users**: Cadastro, Login e Configurações Pessoais.
+    * **Finance/Investments**: Controle financeiro, transações e investimentos.
+    * **Study**: Cadastro de matérias e gerenciamento de planos de estudo.
+    * **Market/Todo/Goals/Ideas**: Listas de compras, tarefas e metas.
+    * **Gym**: Perfil de saúde e planos de treino.
+    * **Vault**: Cofre de senhas criptografadas.
+    * **Google (Externo)**: Agenda, E-mail, Docs e Sheets.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Servidor de Desenvolvimento Local
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
+
+paths:
+# =================================================================
+# 1. AUTENTICAÇÃO E USUÁRIOS
+# =================================================================
+  /auth/login:
+    post:
+      tags:
+        - Autenticação
+      summary: Login do Usuário (Retorna JWT)
+      description: Gera o Access Token (15m) e Refresh Token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  example: "user@exemplo.com"
+                password:
+                  type: string
+                  example: "sua-senha-secreta"
+      responses:
+        '200':
+          description: Sucesso (Tokens e Perfil do Usuário)
+        '401':
+          description: Credenciais inválidas.
+          
+  /users/create:
+    post:
+      tags:
+        - Usuários e Config
+      summary: Cadastrar Novo Usuário
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
+                country_code:
+                  type: string
+                  example: "55"
+                area_code:
+                  type: string
+                  example: "11"
+                phone_number:
+                  type: string
+                  example: "999999999"
+      responses:
+        '201':
+          description: Usuário criado.
+          
+  /users/config:
+    patch:
+      tags:
+        - Usuários e Config
+      summary: Atualizar Configurações do Bot e Usuário
+      description: Atualiza apelidos, personalidade do Agente, e opção de áudio.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userNickname:
+                  type: string
+                agentPersonality:
+                  type: array
+                  items:
+                    type: string
+                ai_send_audio:
+                  type: boolean
+
+# =================================================================
+# 2. FINANÇAS E INVESTIMENTOS
+# =================================================================
+  /finance/transaction:
+    post:
+      tags:
+        - Finanças
+      summary: Adicionar Transação (Gasto ou Ganho)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                  example: 55.50
+                type:
+                  type: string
+                  enum: [income, expense]
+                category:
+                  type: string
+                  example: "Alimentação"
+                date:
+                  type: string
+                  format: date-time
+                  example: "2025-12-10T10:00:00Z"
+      responses:
+        '200':
+          description: Sucesso ao registrar.
+          
+  /finance/recurring:
+    post:
+      tags:
+        - Finanças
+      summary: Adicionar Transação Recorrente (Gasto/Ganho Fixo)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                type:
+                  type: string
+                  enum: [income, expense]
+                day_of_month:
+                  type: integer
+                  example: 5
+      responses:
+        '201':
+          description: Recorrência cadastrada.
+          
+  /finance/report:
+    get:
+      tags:
+        - Finanças
+      summary: Obter Relatório Financeiro e Saldo Atual
+      responses:
+        '200':
+          description: Retorna resumo do mês e saldo atual.
+
+  /investments:
+    post:
+      tags:
+        - Investimentos
+      summary: Adicionar novo aporte
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                asset_name:
+                  type: string
+                  example: "Tesouro IPCA"
+                amount:
+                  type: number
+                  example: 500
+      responses:
+        '201':
+          description: Aporte registrado.
+    get:
+      tags:
+        - Investimentos
+      summary: Listar carteira de investimentos consolidada
+      responses:
+        '200':
+          description: Retorna resumo da carteira por ativo.
+
+# =================================================================
+# 3. ESTUDOS (NOVO)
+# =================================================================
+  /study/subjects:
+    get:
+      tags:
+        - Estudos
+      summary: Listar todas as matérias cadastradas
+      responses:
+        '200':
+          description: Lista de matérias.
+    post:
+      tags:
+        - Estudos
+      summary: Cadastrar nova matéria de estudo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Cálculo 1"
+                category:
+                  type: string
+                  example: "Faculdade"
+      responses:
+        '201':
+          description: Matéria criada.
+
+  /study/plans/draft:
+    post:
+      tags:
+        - Estudos
+      summary: Iniciar um rascunho de plano de estudo
+      description: Cria um novo rascunho (Draft) com o conteúdo a ser estudado, arquivando planos anteriores.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subjectId:
+                  type: string
+                  format: uuid
+                  example: "a1b2c3d4-..."
+                contentToStudy:
+                  type: string
+                  example: "Revisar Limites, Derivadas e Regra da Cadeia."
+      responses:
+        '201':
+          description: Rascunho criado.
+
+  /study/plans/{planId}/advance:
+    patch:
+      tags:
+        - Estudos
+      summary: Avançar para o próximo passo do plano ativo
+      parameters:
+        - name: planId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Avançado para o próximo passo.
+        '404':
+          description: Plano não encontrado ou já concluído.
+          
+# =================================================================
+# 4. LISTAS, TAREFAS E METAS
+# =================================================================
+  /todo:
+    post:
+      tags:
+        - Tarefas (To-Do)
+      summary: Criar Nova Tarefa
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task:
+                  type: string
+                  example: "Comprar leite e pão"
+                deadline:
+                  type: string
+                  format: date-time
+                  example: "2025-12-10T18:00:00Z"
+      responses:
+        '201':
+          description: Tarefa criada.
+          
+  /todo/{id}:
+    patch:
+      tags:
+        - Tarefas (To-Do)
+      summary: Marcar tarefa como concluída/pendente
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                done:
+                  type: boolean
+                  example: true
+      responses:
+        '200':
+          description: Status atualizado.
+          
+  /market-list:
+    post:
+      tags:
+        - Lista de Compras
+      summary: Adicionar múltiplos itens à lista
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      itemName:
+                        type: string
+                      quantity:
+                        type: number
+                  example: [{"itemName": "Pão de forma", "quantity": 1}]
+      responses:
+        '200':
+          description: Itens adicionados/atualizados.
+
+  /goals:
+    get:
+      tags:
+        - Metas (Goals)
+      summary: Listar todas as metas do usuário
+      responses:
+        '200':
+          description: Lista de metas com progresso.
+    post:
+      tags:
+        - Metas (Goals)
+      summary: Criar Nova Meta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                goal_name:
+                  type: string
+                  example: "Reserva de Emergência"
+                target_amount:
+                  type: number
+                  example: 10000
+                metric_unit:
+                  type: string
+                  example: "R$"
+                deadline:
+                  type: string
+                  format: date
+                  example: "2026-12-31"
+      responses:
+        '201':
+          description: Meta criada.
+          
+  /goals/progress/{goalId}:
+    patch:
+      tags:
+        - Metas (Goals)
+      summary: Atualizar Progresso da Meta
+      parameters:
+        - name: goalId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                  example: 500
+      responses:
+        '200':
+          description: Progresso atualizado.
+
+# =================================================================
+# 5. COFRE E GYM
+# =================================================================
+  /vault:
+    post:
+      tags:
+        - Cofre (Vault)
+      summary: Salvar ou Atualizar Anotação Criptografada
+      description: Dados salvos em 'content' são criptografados no banco.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  example: "Login Netflix"
+                category:
+                  type: string
+                  example: "login"
+                content:
+                  type: object
+                  example: { "user": "caiua@email.com", "pass": "secreta123" }
+      responses:
+        '201':
+          description: Anotação salva/atualizada.
+    get:
+      tags:
+        - Cofre (Vault)
+      summary: Buscar Anotações (Título ou Categoria)
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lista de anotações descriptografadas.
+          
+  /gym/profile:
+    post:
+      tags:
+        - Academia (Gym)
+      summary: Atualizar Perfil de Saúde/Treino
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                weight:
+                  type: number
+                  example: 85.5
+                height:
+                  type: number
+                  example: 1.78
+                goal:
+                  type: string
+                  example: "Hipertrofia"
+      responses:
+        '200':
+          description: Perfil atualizado.
+          
+  /gym/plan:
+    get:
+      tags:
+        - Academia (Gym)
+      summary: Obter Plano de Treino Semanal Completo
+      responses:
+        '200':
+          description: Retorna os treinos salvos por dia da semana.
+          
+# =================================================================
+# 6. INTEGRAÇÃO GOOGLE
+# =================================================================
+  /gmail/list:
+    get:
+      tags:
+        - Google (Gmail)
+      summary: Listar E-mails
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "is:unread newer_than:7d"
+      responses:
+        '200':
+          description: Retorna lista de snippets de e-mails.
+
+  /calendar/create:
+    post:
+      tags:
+        - Google (Calendar)
+      summary: Criar Novo Evento na Agenda
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                summary:
+                  type: string
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Evento criado e link do Meet retornado.
