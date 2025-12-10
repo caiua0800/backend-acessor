@@ -5,8 +5,8 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import cron from "node-cron";
-import swaggerUi from "swagger-ui-express"; // NOVO: SWAGGER
-import YAML from "yamljs"; // NOVO: SWAGGER
+import swaggerUi from "swagger-ui-express";
+import YAML from "yamljs";
 
 // Importa todas as suas rotas
 import authRoutes from "./routes/authRoutes";
@@ -27,18 +27,36 @@ import testRoutes from "./routes/testRoutes";
 import gymRoutes from "./routes/gymRoutes";
 import todoRoutes from "./routes/todoRoutes";
 import vaultRoutes from "./routes/vaultRoutes";
-import studyRoutes from "./routes/studyRoutes"; // NOVO: ROTAS DE ESTUDO
-
-// Importa serviços de inicialização
+import studyRoutes from "./routes/studyRoutes";
 import { setupMemoryTable } from "./services/memoryService";
 import { processNotificationQueue } from "./services/notificationService";
 import { processDailyRecurringTransactions } from "./services/financeService";
 
 const app = express();
 
-// --- CONFIGURAÇÃO SWAGGER / OPENAPI ---
-// Carrega o arquivo de definição na raiz do projeto (swagger.yaml)
+// CRÍTICO: Usa process.env.PORT ou a porta 8080 (padrão para Health Check da DigitalOcean/Render)
+const PORT = process.env.PORT || 8080;
+
+// --- CONFIGURAÇÃO SWAGGER / OPENAPI DINÂMICA ---
+// 1. Carrega o arquivo de definição na raiz do projeto (swagger.yaml)
 const swaggerDocument = YAML.load("./swagger.yaml");
+
+// 2. LÓGICA DINÂMICA: Injeta o host/protocolo correto
+const isProduction =
+  process.env.NODE_ENV === "production" && process.env.PUBLIC_URL;
+const protocol = isProduction ? "https" : "http";
+const host = isProduction ? process.env.PUBLIC_URL : `localhost:${PORT}`;
+
+// Sobrescreve a seção 'servers' com o valor dinâmico
+swaggerDocument.servers = [
+  {
+    url: `${protocol}://${host}`,
+    description: isProduction
+      ? "Servidor de Produção (DigitalOcean)"
+      : "Servidor de Desenvolvimento Local",
+  },
+];
+// --- FIM DA CONFIGURAÇÃO DINÂMICA ---
 
 // --- CONFIGURAÇÃO CORS PERMISSIVA (BLINDADA) ---
 app.use(
@@ -58,20 +76,15 @@ app.use(
 
 app.use(express.json());
 
-// CRÍTICO: Usa a porta 8080 para o Health Check do DigitalOcean/Render
-const PORT = process.env.PORT || 8080;
-
 // ===========================================
 // CONFIGURAÇÃO DAS ROTAS E MIDDLEWARE
 // ===========================================
 
 // 1. ROTAS DE DOCUMENTAÇÃO (SWAGGER UI)
-// Configura a interface visual do Swagger UI em /api-docs
 app.use(
   "/api-docs",
   swaggerUi.serve,
   swaggerUi.setup(swaggerDocument, {
-    // Personalização para dar o "estilo de IA"
     customCss: ".swagger-ui .topbar { background-color: #3f51b5; }",
     customSiteTitle: "AI Assistant Backend - Documentação API",
     customfavIcon: "https://seulogo.com/favicon-ai.png",
@@ -99,7 +112,7 @@ app.use("/test", testRoutes);
 app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
 app.use("/vault", vaultRoutes);
-app.use("/study", studyRoutes); // <-- NOVO: ROTAS DE ESTUDO
+app.use("/study", studyRoutes);
 
 async function initializeServices() {
   try {
@@ -161,7 +174,7 @@ async function initializeServices() {
     app.listen(PORT, () => {
       console.log(`🚀 Servidor rodando e RESPONDENDO na porta ${PORT}`);
       console.log(
-        `📑 Documentação Swagger disponível em http://localhost:${PORT}/api-docs`
+        `📑 Documentação Swagger disponível em ${protocol}://${host}/api-docs`
       );
 
       // 3. Inicia os serviços lentos em SEGUNDO PLANO
