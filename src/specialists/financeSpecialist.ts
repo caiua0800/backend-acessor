@@ -6,6 +6,7 @@ import * as aiService from "../services/aiService";
 import { UserContext } from "../services/types";
 import moment from "moment-timezone";
 
+// --- INTERFACES ---
 interface FinanceItem {
   amount: string;
   description: string;
@@ -40,6 +41,8 @@ interface FinanceIntention {
   missing_info_question?: string;
 }
 
+// --- HELPERS ---
+
 function cleanJsonOutput(rawOutput: string): string {
   const start = rawOutput.indexOf("{");
   const end = rawOutput.lastIndexOf("}");
@@ -59,6 +62,7 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
   let cleanDesc = item.description;
   let cleanDay = item.day_of_month;
 
+  // Tenta extrair dia do texto se não veio no JSON (ex: "Netflix dia 15")
   const dayRegex = /\b(?:dia|dt|vence|vencimento)\s*(\d{1,2})\b/gi;
   const match = dayRegex.exec(cleanDesc);
 
@@ -67,14 +71,18 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
       const d = parseInt(match[1]);
       if (d >= 1 && d <= 31) cleanDay = d;
     }
+    // Remove o "dia X" da descrição para ficar limpo
     cleanDesc = cleanDesc.replace(dayRegex, "").trim();
     cleanDesc = cleanDesc.replace(/\s+[-–,.]+\s*$/, "").trim();
   }
 
+  // Detecta intenção de recorrência por palavras-chave
   const isReallyRecurring =
     item.is_recurring || /todo|mensal|fixo|assinatura/i.test(cleanDesc);
 
   let finalDate = item.date;
+  // Se for recorrente, não precisa de data exata (usa day_of_month).
+  // Se for pontual e tiver dia, constrói a data desse mês.
   if (!isReallyRecurring && cleanDay && !finalDate) {
     finalDate = buildDateFromDay(cleanDay);
   }
@@ -88,6 +96,7 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
   };
 }
 
+// --- FUNÇÃO PRINCIPAL (EXPORTADA) ---
 export async function financeSpecialist(context: UserContext): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
 
@@ -101,7 +110,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     
     - "check_recurring": Consultar total de gastos fixos.
     - "check_budget_forecast": O usuário quer saber "Quanto sobra do Teto?", "Quanto tenho pra gastar?", "Previsão de caixa".
-    - "add_investment": Investimentos.
+    - "add_investment": Investimentos (Aportes).
     - "configure_settings": Definir Renda, TETO/LIMITE ou Saldo.
     - "list_report": Relatório geral ("Manda escrito", "Resumo", "Situação").
     - "export_report": Exportar planilha.
@@ -115,11 +124,13 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       "intent": "...",
       "items": [ { "amount": "...", "description": "...", "is_recurring": false, "day_of_month": 10 } ],
       "current_balance": "...",
-      "spending_limit": "..."
+      "spending_limit": "...",
+      "monthly_income": "..."
     }
   `;
 
   try {
+    // 1. EXTRAÇÃO DE DADOS (IA)
     const rawJsonString = await aiService.extractData(
       extractionPrompt,
       fullMessage
@@ -127,6 +138,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     const jsonString = cleanJsonOutput(rawJsonString);
     const data: FinanceIntention = JSON.parse(jsonString);
 
+    // Tratamento de Confirmação Simples
     if (data.intent === "confirmation") {
       return await aiService.generatePersonaResponse(
         "O usuário confirmou que está tudo certo. Responda com algo curto e positivo tipo 'Show!', 'Maravilha!', 'Combinado'.",
@@ -135,6 +147,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       );
     }
 
+    // Tratamento de Dúvida
     if (data.intent === "clarification_needed") {
       return await aiService.generatePersonaResponse(
         `Faltou informação. Pergunte: "${
@@ -148,9 +161,10 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     let actionConfirmedMessage = "";
     let processedCount = 0;
 
+    // Busca relatório atual para contextos de cálculo
     const currentReport = await financeService.getFinanceReport(waId);
 
-    // A. PROCESSAR ITENS
+    // A. PROCESSAR ITENS (GASTOS/GANHOS)
     if (
       data.intent === "process_items" ||
       (data.items && data.items.length > 0)
@@ -163,6 +177,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
         if (!item.amount || !item.description) continue;
 
         if (item.is_recurring && item.day_of_month) {
+          // GASTO FIXO/RECORRENTE
           try {
             const created = await financeService.addRecurringTransaction(waId, {
               amount: item.amount,
@@ -179,6 +194,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
             responses.push(`❌ Erro em: ${item.description}`);
           }
         } else {
+          // GASTO COMUM
           try {
             await financeService.addTransaction(waId, {
               amount: item.amount,
@@ -239,7 +255,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       }
     }
 
-    // C. FIXOS
+    // C. CHECAR RECORRENTES (FIXOS)
     else if (data.intent === "check_recurring") {
       const recurringData = await financeService.getRecurringExpensesTotal(
         waId
@@ -256,8 +272,9 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       }
     }
 
-    // D. CONFIGURAR
+    // D. CONFIGURAR (RENDA, TETO, SALDO)
     else if (data.intent === "configure_settings") {
+      // Se vier ajuste de saldo como item, trata aqui
       let balanceVal = data.current_balance;
       if (
         !balanceVal &&
@@ -267,6 +284,8 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       ) {
         balanceVal = data.items[0].amount;
       }
+      
+      // Ajuste de saldo via transação de correção
       if (balanceVal) {
         const diff =
           financeService.parseMoney(balanceVal) -
@@ -281,17 +300,20 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
           });
         }
       }
+
+      // Chama o serviço para salvar configurações (Teto/Renda)
+      // Nota: Passamos null no saldo se já ajustamos via transação para não conflitar
       await financeService.setFinanceSettings(
         waId,
         data.monthly_income,
         data.spending_limit,
-        null,
+        null, 
         data.currency
       );
       actionConfirmedMessage = "✅ Configurações financeiras atualizadas.";
     }
 
-    // E. RELATÓRIOS
+    // E. RELATÓRIOS E EXPORTAÇÃO
     else if (data.intent === "list_report" || data.intent === "export_report") {
       const updatedReport = await financeService.getFinanceReport(waId);
 
@@ -313,10 +335,10 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
                 t.description,
                 t.amount.toString(),
               ]);
-            actionConfirmedMessage = `✅ Planilha: ${sheet.link}`;
+            actionConfirmedMessage = `✅ Planilha criada: ${sheet.link}`;
           }
         } catch (e) {
-          actionConfirmedMessage = "Erro ao criar planilha.";
+          actionConfirmedMessage = "Erro ao criar planilha. Verifique a integração com Google.";
         }
       } else {
         const limit = updatedReport.config.limite_estipulado || 0;
@@ -350,10 +372,11 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
           data.items[0].description,
           data.items[0].amount
         );
-        actionConfirmedMessage = "Investimento registrado!";
+        actionConfirmedMessage = "Investimento registrado com sucesso!";
       }
     }
 
+    // G. RESPOSTA PADRÃO SE NADA FOI FEITO
     if (!actionConfirmedMessage && processedCount === 0) {
       return await aiService.generatePersonaResponse(
         "Não entendi a movimentação financeira. Peça para repetir com valores claros.",
@@ -362,6 +385,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       );
     }
 
+    // 2. RESPOSTA FINAL (COM PERSONA)
     return await aiService.generatePersonaResponse(
       `Confirme a ação financeira: """${actionConfirmedMessage}""". Se for um gasto pontual, apenas confirme que foi registrado.`,
       fullMessage,
@@ -370,7 +394,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
   } catch (error: any) {
     console.error(error);
     return await aiService.generatePersonaResponse(
-      `Erro: ${error.message}`,
+      `Erro técnico: ${error.message}`,
       fullMessage,
       userConfig
     );

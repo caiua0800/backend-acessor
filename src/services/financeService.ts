@@ -125,19 +125,37 @@ export const setFinanceSettingsByUserId = async (
   if (checkRes.rows.length > 0) {
     const current = checkRes.rows[0];
 
-    finalIncome =
-      income !== undefined && income !== null
+    // CORREÇÃO CRÍTICA: Só atualiza se o novo valor for válido (>0 ou explicitamente passado corretamente)
+    // Evita que strings vazias "" ou undefined zerem o banco
+    const parsedIncome =
+      income !== undefined && income !== null && income !== ""
         ? parseMoney(income)
+        : undefined;
+    finalIncome =
+      parsedIncome !== undefined
+        ? parsedIncome
         : parseFloat(current.estimated_monthly_income || 0);
 
-    finalLimit =
-      limit !== undefined && limit !== null
+    const parsedLimit =
+      limit !== undefined && limit !== null && limit !== ""
         ? parseMoney(limit)
+        : undefined;
+    // Se parsedLimit for 0, assumimos que foi erro de extração, a menos que queira zerar (que seria outro fluxo)
+    // Mantém o valor antigo se o novo for inválido
+    finalLimit =
+      parsedLimit !== undefined && parsedLimit > 0
+        ? parsedLimit
         : parseFloat(current.spending_limit || 0);
 
-    finalBalance =
-      currentBalance !== undefined && currentBalance !== null
+    const parsedBalance =
+      currentBalance !== undefined &&
+      currentBalance !== null &&
+      currentBalance !== ""
         ? parseMoney(currentBalance)
+        : undefined;
+    finalBalance =
+      parsedBalance !== undefined
+        ? parsedBalance
         : parseFloat(current.current_account_amount || 0);
 
     await pool.query(
@@ -150,6 +168,7 @@ export const setFinanceSettingsByUserId = async (
       [finalIncome, finalLimit, finalBalance, currency, userId]
     );
   } else {
+    // Se não existe, cria com o que veio (ou 0)
     finalIncome = parseMoney(income);
     finalLimit = parseMoney(limit);
     finalBalance = parseMoney(currentBalance);
@@ -717,8 +736,9 @@ export const deleteInvestmentByUserId = async (
   return (res.rowCount ?? 0) > 0;
 };
 
-
-export const getPendingRecurringExpensesTotalByUserId = async (userId: string) => {
+export const getPendingRecurringExpensesTotalByUserId = async (
+  userId: string
+) => {
   // Define o mês atual (ex: '2023-10') para comparar com last_processed_at
   const currentMonthStr = moment().tz("America/Sao_Paulo").format("YYYY-MM");
 
@@ -740,13 +760,15 @@ export const getPendingRecurringExpensesTotalByUserId = async (userId: string) =
 export const getBudgetForecastByUserId = async (userId: string) => {
   // Reutiliza o relatório existente para pegar Gasto e Teto
   const report = await getFinanceReportByUserId(userId);
-  
+
   // Pega o pendente fixo
-  const pendingRecurring = await getPendingRecurringExpensesTotalByUserId(userId);
+  const pendingRecurring = await getPendingRecurringExpensesTotalByUserId(
+    userId
+  );
 
   const limit = report.config.limite_estipulado || 0;
   const spentSoFar = report.resumo_mes.gastos || 0;
-  
+
   // O Cálculo Mágico
   const available = limit - spentSoFar - pendingRecurring;
 
@@ -758,7 +780,7 @@ export const getBudgetForecastByUserId = async (userId: string) => {
       spent_so_far: spentSoFar,
       pending_recurring: pendingRecurring,
       available_to_spend: available,
-      status: available < 0 ? "negative" : "positive"
-    }
+      status: available < 0 ? "negative" : "positive",
+    },
   };
 };
