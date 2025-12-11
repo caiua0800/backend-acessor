@@ -8,6 +8,7 @@ import {
   getInvestments,
   addRecurring,
   searchTransactions,
+  listRecurring,
 } from "../controllers/financeController";
 
 const router = Router();
@@ -21,5 +22,6 @@ router.get("/search", searchTransactions);
 router.get("/report", report);
 router.get("/transactions", listTransactions);
 router.get("/investments", getInvestments);
+router.get("/recurring", listRecurring);
 
 export default router;

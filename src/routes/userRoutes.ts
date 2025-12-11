@@ -4,6 +4,7 @@ import {
   createUser,
   updatePhone,
   updateConfig,
+  getUser,
 } from "../controllers/userController";
 
 const router = Router();
@@ -19,5 +20,5 @@ router.put("/phone", updatePhone);
 
 // 3. Rota para mudar configs do bot/user (PATCH /users/config)
 router.patch("/config", updateConfig);
-
+router.get("/me", getUser); 
 export default router;

@@ -33,6 +33,23 @@ const formatPhoneNumber = (
   return `${cleanCountry}${cleanArea}${cleanNumber}`;
 };
 
+export const getUserById = async (userId: string) => {
+  const res = await pool.query(
+    `SELECT u.id, u.full_name, u.email, u.phone_number, u.created_at,
+            uc.user_nickname, uc.agent_nickname, uc.agent_gender, uc.agent_personality, uc.ai_send_audio
+     FROM users u
+     LEFT JOIN user_configs uc ON u.id = uc.user_id
+     WHERE u.id = $1`,
+    [userId]
+  );
+
+  if (res.rows.length === 0) {
+    throw new Error("Usuário não encontrado.");
+  }
+
+  return res.rows[0];
+};
+
 // 1. CRIAÇÃO DE NOVO USUÁRIO (MANTIDO)
 export const createNewUser = async (data: UserData) => {
   const finalName = data.fullName.trim().toUpperCase();

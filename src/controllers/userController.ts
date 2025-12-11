@@ -53,6 +53,17 @@ export const createUser = async (req: Request, res: Response) => {
   }
 };
 
+// GET /users/me (Rota protegida)
+export const getUser = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!; // Pega o ID do Token
+    const user = await userService.getUserById(userId);
+    res.json(user);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
 // PUT /users/phone (Rota protegida - USA JWT)
 export const updatePhone = async (req: AuthRequest, res: Response) => {
   try {

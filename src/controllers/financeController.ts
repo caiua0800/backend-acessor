@@ -124,6 +124,33 @@ export const searchTransactions = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// GET /finance/recurring
+export const listRecurring = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    
+    // Pega page e limit da query string, com valores padrão
+    const page = parseInt(req.query.page as string || '1');
+    const limit = parseInt(req.query.limit as string || '20');
+    
+    if (limit > 100) {
+        return res.status(400).json({ error: "Limite máximo de 100 itens por página." });
+    }
+
+    const offset = (page - 1) * limit;
+
+    const result = await financeService.listRecurringTransactionsByUserId(
+      userId,
+      limit,
+      offset
+    );
+
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
 // GET /finance/investments (Para listar investimentos)
 export const getInvestments = async (req: AuthRequest, res: Response) => {
   try {

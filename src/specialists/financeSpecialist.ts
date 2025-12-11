@@ -1,17 +1,16 @@
-// src/specialists/financeSpecialist.ts
-
 import * as financeService from "../services/financeService";
 import * as googleService from "../services/googleService";
 import * as aiService from "../services/aiService";
 import { UserContext } from "../services/types";
+import moment from "moment-timezone";
 
 interface FinanceItem {
   amount: string;
   description: string;
   type: "income" | "expense";
   category?: string;
-  date?: string;
-  day_of_month?: number;
+  date?: string; // ISO String para gastos pontuais
+  day_of_month?: number; // Para recorrentes
   is_recurring?: boolean;
 }
 
@@ -24,7 +23,8 @@ interface FinanceIntention {
     | "export_report"
     | "clarification_needed"
     | "check_recurring"
-    | "check_budget_forecast";
+    | "check_budget_forecast"
+    | "confirmation"; // <--- NOVO: Para parar o loop do "Sim"
 
   amount?: string;
   description?: string;
@@ -47,10 +47,21 @@ function cleanJsonOutput(rawOutput: string): string {
   return rawOutput;
 }
 
+// Helper para construir data ISO baseada no dia informado pelo usuário
+function buildDateFromDay(day: number): string {
+  const now = moment().tz("America/Sao_Paulo");
+  // Se o dia informado for maior que o dia de hoje, assume que foi no mês passado (ex: hoje é 10, usuário diz "dia 28")
+  // Ou mantém no mês atual se for intenção futura. 
+  // Lógica padrão: Mesma competência (Mês atual).
+  const date = now.clone().date(day);
+  return date.format(); // Retorna ISO
+}
+
 function sanitizeItem(item: FinanceItem): FinanceItem {
   let cleanDesc = item.description;
   let cleanDay = item.day_of_month;
 
+  // Regex para capturar "dia 1", "vence dia 10", etc.
   const dayRegex = /\b(?:dia|dt|vence|vencimento)\s*(\d{1,2})\b/gi;
   const match = dayRegex.exec(cleanDesc);
 
@@ -59,45 +70,60 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
       const d = parseInt(match[1]);
       if (d >= 1 && d <= 31) cleanDay = d;
     }
+    // Remove o "dia X" da descrição para ficar limpo
     cleanDesc = cleanDesc.replace(dayRegex, "").trim();
     cleanDesc = cleanDesc.replace(/\s+[-–,.]+\s*$/, "").trim();
   }
 
-  const isRecurring =
-    item.is_recurring || (cleanDay !== undefined && cleanDay > 0);
+  // CORREÇÃO CRÍTICA:
+  // Só marca como RECORRENTE se a IA identificou explicitamente (is_recurring)
+  // OU se a descrição contém palavras chave de repetição.
+  // NÃO força recorrente só porque tem dia.
+  const isReallyRecurring = item.is_recurring || /todo|mensal|fixo|assinatura/i.test(cleanDesc);
+
+  // Se tem dia mas NÃO é recorrente, calculamos a data ISO para ser um gasto pontual
+  let finalDate = item.date;
+  if (!isReallyRecurring && cleanDay && !finalDate) {
+      finalDate = buildDateFromDay(cleanDay);
+  }
 
   return {
     ...item,
     description: cleanDesc,
     day_of_month: cleanDay,
-    is_recurring: isRecurring,
+    is_recurring: isReallyRecurring,
+    date: finalDate
   };
 }
 
 export async function financeSpecialist(context: UserContext): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
 
-  // --- ATUALIZAÇÃO NO PROMPT ABAIXO ---
   const extractionPrompt = `
     Você é um Especialista Financeiro. Converta o texto do usuário em JSON.
 
     INTENÇÕES:
-    - "process_items": Registrar gastos, ganhos ou contas fixas.
+    - "process_items": Registrar gastos ou ganhos.
+      IMPORTANTE: Se o usuário disser "dia 1" ou "data tal", inclua isso.
+      IMPORTANTE: Só marque "is_recurring": true se for algo FIXO (Todo mês, Assinatura, Aluguel). Se for gasto comum ("Uber dia 1"), é false.
+    
     - "check_recurring": Consultar total de gastos fixos.
-    - "check_budget_forecast": CÁLCULO DE PLANEJAMENTO. O usuário quer saber "Quanto sobra do Teto menos Fixos?".
+    - "check_budget_forecast": O usuário quer saber "Quanto sobra do Teto menos Fixos?".
     - "add_investment": Investimentos.
     - "configure_settings": Definir Renda, TETO/LIMITE ou Saldo.
-    - "list_report": Relatório geral. USE ISTO SE O USUÁRIO DISSER: "Manda escrito", "Lista pra mim", "Escreve", "Resumo", "Situação atual" (sem passar novos valores).
+    - "list_report": Relatório geral ("Manda escrito", "Resumo", "Situação").
     - "export_report": Exportar planilha.
-    - "clarification_needed": Use APENAS se o usuário falar algo vago que NÃO seja pedido de relatório (ex: "quanto custou?").
+    
+    - "confirmation": SE O USUÁRIO DISSER APENAS "Sim", "Ok", "Certo", "Confirmo", "Está certo". (Isso serve para encerrar o assunto).
+    
+    - "clarification_needed": Use APENAS se o usuário falar de dinheiro de forma vaga sem valores ("quanto custou?").
 
     JSON RESPOSTA:
     {
       "intent": "...",
-      "items": [ ... ],
+      "items": [ { "amount": "...", "description": "...", "is_recurring": false, "day_of_month": 10 } ],
       "current_balance": "...",
-      "spending_limit": "...",
-      "missing_info_question": "..."
+      "spending_limit": "..."
     }
   `;
 
@@ -108,6 +134,15 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     );
     const jsonString = cleanJsonOutput(rawJsonString);
     const data: FinanceIntention = JSON.parse(jsonString);
+
+    // --- BLOQUEIO DO LOOP DE IDIOTA ---
+    if (data.intent === "confirmation") {
+        return await aiService.generatePersonaResponse(
+            "O usuário confirmou que está tudo certo. Responda com algo curto e positivo tipo 'Show!', 'Maravilha!', 'Combinado'.",
+            fullMessage,
+            userConfig
+        );
+    }
 
     if (data.intent === "clarification_needed") {
       return await aiService.generatePersonaResponse(
@@ -133,9 +168,10 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       const responses: string[] = [];
 
       for (let item of items) {
-        item = sanitizeItem(item);
+        item = sanitizeItem(item); // Agora sanitizeItem não força recorrente erradamente
         if (!item.amount || !item.description) continue;
 
+        // SE FOR RECORRENTE (FIXO)
         if (item.is_recurring && item.day_of_month) {
           try {
             const created = await financeService.addRecurringTransaction(waId, {
@@ -146,22 +182,27 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
               day_of_month: item.day_of_month,
             });
             responses.push(
-              `🔄 Fixo: ${item.description} (Dia ${created.day_of_month})`
+              `🔄 Fixo Agendado: ${item.description} (Dia ${created.day_of_month})`
             );
           } catch (err) {
             console.error(err);
             responses.push(`❌ Erro em: ${item.description}`);
           }
-        } else {
+        } 
+        // SE FOR TRANSAÇÃO COMUM (MESMO QUE TENHA DATA ESPECÍFICA)
+        else {
           try {
             await financeService.addTransaction(waId, {
               amount: item.amount,
               type: item.type || "expense",
               category: item.category || "Geral",
               description: item.description,
-              date: item.date,
+              date: item.date, // Passa a data calculada (ex: dia 1 do mês atual)
             });
-            responses.push(`✅ ${item.description}: R$ ${item.amount}`);
+            
+            // Formata a data para a resposta ficar clara
+            const dateInfo = item.date ? ` (${moment(item.date).format('DD/MM')})` : "";
+            responses.push(`✅ Registrado: ${item.description}: R$ ${item.amount}${dateInfo}`);
           } catch (err) {
             console.error(err);
             responses.push(`❌ Erro em: ${item.description}`);
@@ -251,7 +292,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       actionConfirmedMessage = "✅ Configurações financeiras atualizadas.";
     }
 
-    // E. RELATÓRIOS (AQUI ESTÁ A MÁGICA DO "MANDA ESCRITO")
+    // E. RELATÓRIOS
     else if (data.intent === "list_report" || data.intent === "export_report") {
       const updatedReport = await financeService.getFinanceReport(waId);
 
@@ -279,7 +320,6 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
           actionConfirmedMessage = "Erro ao criar planilha.";
         }
       } else {
-        // --- MELHORIA: TRAZER DADOS DE PLANEJAMENTO NO RELATÓRIO GERAL ---
         const limit = updatedReport.config.limite_estipulado || 0;
         let forecastText = "";
 
@@ -295,10 +335,10 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
         }
 
         actionConfirmedMessage =
-          `📝 *Resumo Financeiro Solicitado:*\n\n` +
+          `📝 *Resumo Financeiro:*\n\n` +
           `💰 *Saldo Atual:* R$ ${updatedReport.saldo_atual_conta}\n` +
           `📉 *Gastos do Mês:* R$ ${updatedReport.resumo_mes.gastos}\n` +
-          `${forecastText}\n` + // Inclui o cálculo se tiver teto
+          `${forecastText}\n` + 
           `_Estes são os dados registrados no momento._`;
       }
     }
@@ -317,15 +357,14 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
 
     if (!actionConfirmedMessage && processedCount === 0) {
       return await aiService.generatePersonaResponse(
-        "Não entendi. Peça para repetir.",
+        "Não entendi a movimentação financeira. Peça para repetir com valores claros.",
         fullMessage,
         userConfig
       );
     }
 
-    // Adiciona instrução explicita para a IA gerar o texto formatado bonitinho
     return await aiService.generatePersonaResponse(
-      `O usuário pediu para escrever/listar os dados. Formate esta resposta claramente: """${actionConfirmedMessage}"""`,
+      `Confirme a ação financeira: """${actionConfirmedMessage}""". Se for um gasto pontual, apenas confirme que foi registrado.`,
       fullMessage,
       userConfig
     );

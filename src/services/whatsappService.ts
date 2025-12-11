@@ -87,7 +87,9 @@ export const sendTextMessage = async (
 
       const isListResponse = (messageText.match(/•|- /g) || []).length > 2;
 
-      if (wordCount <= 70 && !askedForText && !isListResponse) {
+      var randomNum = Math.random();
+
+      if (wordCount <= 70 && !askedForText && !isListResponse && randomNum > 0.50) {
         shouldSendAudio = true;
       }
     }

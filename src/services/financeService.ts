@@ -1,21 +1,17 @@
 import moment from "moment";
 import { pool } from "../db";
 
-// --- 1. FUNÇÃO DE PARSING INTELIGENTE ---
 export const parseMoney = (value: any): number => {
   if (typeof value === "number") return value;
   if (!value) return 0;
-
   let clean = value.toString().trim();
   clean = clean.replace(/[^\d.,-]/g, "");
-
   if (clean.includes(",") && clean.length - clean.lastIndexOf(",") <= 3) {
     clean = clean.replace(/\./g, "");
     clean = clean.replace(",", ".");
   } else {
     clean = clean.replace(/,/g, "");
   }
-
   const result = parseFloat(clean);
   return isNaN(result) ? 0 : result;
 };
@@ -53,9 +49,10 @@ export const setFinanceSettings = async (
 
 // --- 3. ADICIONAR TRANSAÇÃO ---
 export const addTransaction = async (whatsappId: string, data: any) => {
-  const userId = await getUserId(whatsappId);
+  const userId = await getUserId(whatsappId); // Função helper getUserId já existente
   return addTransactionByUserId(userId, data);
 };
+
 
 // --- 4. RELATÓRIO COMPLETO ---
 export const getFinanceReport = async (whatsappId: string) => {
@@ -152,22 +149,23 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
   const amountVal = Math.abs(parseMoney(data.amount));
   const type = data.type ? data.type.toLowerCase().trim() : "expense";
 
+  // Lógica de Data Robusta
   let transactionDate = new Date();
   if (data.date) {
-    if (data.date.includes("T")) {
-      transactionDate = new Date(data.date);
-    } else {
-      transactionDate = new Date(`${data.date}T00:00:00`);
+    // Tenta interpretar a data vinda do bot (YYYY-MM-DD ou ISO)
+    const d = new Date(data.date);
+    // Se for data válida e não "Invalid Date", usa ela.
+    if (!isNaN(d.getTime())) {
+      // Ajuste de fuso horário simples (para garantir que dia 1 seja dia 1)
+      transactionDate = d;
     }
   }
-  if (isNaN(transactionDate.getTime())) transactionDate = new Date();
 
-  const createdAt = new Date();
   const client = await pool.connect();
-
   try {
     await client.query("BEGIN");
 
+    // Lógica de Saldo
     const settingsRes = await client.query(
       `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
       [userId]
@@ -175,30 +173,22 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
 
     let currentBalance = 0;
     if (settingsRes.rows.length > 0) {
-      currentBalance = parseFloat(
-        settingsRes.rows[0].current_account_amount || 0
-      );
+      currentBalance = parseFloat(settingsRes.rows[0].current_account_amount || 0);
     } else {
       await client.query(
-        `INSERT INTO finance_settings (user_id, current_account_amount, estimated_monthly_income, spending_limit) 
-         VALUES ($1, 0, 0, 0)`,
+        `INSERT INTO finance_settings (user_id, current_account_amount, estimated_monthly_income, spending_limit) VALUES ($1, 0, 0, 0)`,
         [userId]
       );
     }
 
     const beforeAmount = currentBalance;
-    let afterAmount = currentBalance;
+    let afterAmount = type === "income" ? currentBalance + amountVal : currentBalance - amountVal;
 
-    if (type === "income") {
-      afterAmount = currentBalance + amountVal;
-    } else {
-      afterAmount = currentBalance - amountVal;
-    }
-
+    // Inserção
     await client.query(
       `INSERT INTO transactions 
        (user_id, amount, type, category, description, receipt_url, transaction_date, before_account_amount, current_account_amount, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
       [
         userId,
         amountVal,
@@ -208,18 +198,17 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
         data.receipt_url || null,
         transactionDate,
         beforeAmount,
-        afterAmount,
-        createdAt,
+        afterAmount
       ]
     );
 
+    // Atualiza Saldo na tabela de settings
     await client.query(
       `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
       [afterAmount, userId]
     );
 
     await client.query("COMMIT");
-
     return `Sucesso.`;
   } catch (e) {
     await client.query("ROLLBACK");
@@ -486,20 +475,25 @@ export const addRecurringTransaction = async (
 export const getRecurringExpensesTotal = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
 
+  // Soma total de despesas ativas
   const res = await pool.query(
     `SELECT SUM(amount) as total 
      FROM recurring_transactions 
-     WHERE user_id = $1 AND active = TRUE AND type = 'expense'`,
+     WHERE user_id = $1 
+     AND (active = TRUE OR active IS NULL) 
+     AND type = 'expense'`,
     [userId]
   );
-
+  
   const total = parseFloat(res.rows[0].total || 0);
 
-  // Opcional: Pegar lista detalhada
+  // Pega a lista detalhada
   const listRes = await pool.query(
     `SELECT description, amount, day_of_month 
      FROM recurring_transactions 
-     WHERE user_id = $1 AND active = TRUE AND type = 'expense'
+     WHERE user_id = $1 
+     AND (active = TRUE OR active IS NULL)
+     AND type = 'expense'
      ORDER BY day_of_month ASC`,
     [userId]
   );
@@ -588,4 +582,139 @@ export const searchTransactionsByUserId = async (
     page: offset / limit + 1,
     limit: limit,
   };
+};
+
+export const listRecurringTransactionsByUserId = async (
+  userId: string,
+  limit: number,
+  offset: number
+) => {
+  // 1. Conta o total de registros para esse usuário
+  const countRes = await pool.query(
+    "SELECT COUNT(*) FROM recurring_transactions WHERE user_id = $1",
+    [userId]
+  );
+  const total = parseInt(countRes.rows[0].count, 10);
+
+  // 2. Busca os dados paginados
+  const res = await pool.query(
+    `SELECT * FROM recurring_transactions 
+     WHERE user_id = $1 
+     ORDER BY day_of_month ASC, created_at DESC 
+     LIMIT $2 OFFSET $3`,
+    [userId, limit, offset]
+  );
+
+  const items = res.rows.map((row) => ({
+    id: row.id,
+    description: row.description,
+    amount: parseFloat(row.amount),
+    type: row.type,
+    category: row.category,
+    day_of_month: row.day_of_month,
+    active: row.active,
+    last_processed_at: row.last_processed_at
+  }));
+
+  return {
+    items,
+    total,
+    page: (offset / limit) + 1,
+    limit,
+    total_pages: Math.ceil(total / limit)
+  };
+};
+
+export const searchInvestmentsByUserId = async (
+  userId: string,
+  limit: number,
+  offset: number,
+  assetNameFilter?: string
+) => {
+  let countQuery = `SELECT COUNT(*) FROM investments WHERE user_id = $1`;
+  let dataQuery = `SELECT * FROM investments WHERE user_id = $1`;
+  
+  const params: any[] = [userId];
+  let paramIndex = 2;
+
+  if (assetNameFilter) {
+    // Filtro insensível a maiúsculas/minúsculas e acentos
+    const clause = ` AND unaccent(LOWER(asset_name)) ILIKE unaccent(LOWER($${paramIndex}))`;
+    countQuery += clause;
+    dataQuery += clause;
+    params.push(`%${assetNameFilter}%`);
+    paramIndex++;
+  }
+
+  // Pega o total para a paginação
+  const countRes = await pool.query(countQuery, params.slice(0, paramIndex - 1));
+  const total = parseInt(countRes.rows[0].count, 10);
+
+  // Adiciona ordenação e paginação
+  dataQuery += ` ORDER BY investment_date DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+  params.push(limit, offset);
+
+  const dataRes = await pool.query(dataQuery, params);
+
+  return {
+    investments: dataRes.rows.map(row => ({
+      ...row,
+      amount: parseFloat(row.amount) // Garante que venha como number
+    })),
+    total,
+    page: (offset / limit) + 1,
+    limit,
+    total_pages: Math.ceil(total / limit)
+  };
+};
+
+// 2. Atualizar Investimento
+export const updateInvestmentByUserId = async (
+  userId: string,
+  investmentId: string,
+  assetName?: string,
+  amount?: any
+) => {
+  const fields = [];
+  const values = [];
+  let paramIndex = 1;
+
+  if (assetName) {
+    fields.push(`asset_name = $${paramIndex++}`);
+    values.push(assetName);
+  }
+  
+  if (amount !== undefined) {
+    const val = parseMoney(amount); // Reutiliza seu parser seguro
+    if (val <= 0) throw new Error("O valor deve ser positivo.");
+    fields.push(`amount = $${paramIndex++}`);
+    values.push(val);
+  }
+
+  if (fields.length === 0) throw new Error("Nenhum dado para atualizar.");
+
+  // Adiciona timestamp de update
+  fields.push(`updated_at = NOW()`);
+
+  // Adiciona IDs para o WHERE
+  values.push(investmentId, userId);
+  
+  const query = `
+    UPDATE investments 
+    SET ${fields.join(", ")} 
+    WHERE id = $${paramIndex++} AND user_id = $${paramIndex++}
+    RETURNING *
+  `;
+
+  const res = await pool.query(query, values);
+  return res.rows[0];
+};
+
+// 3. Deletar Investimento
+export const deleteInvestmentByUserId = async (userId: string, investmentId: string) => {
+  const res = await pool.query(
+    "DELETE FROM investments WHERE id = $1 AND user_id = $2 RETURNING id",
+    [investmentId, userId]
+  );
+  return (res.rowCount ?? 0) > 0;
 };
