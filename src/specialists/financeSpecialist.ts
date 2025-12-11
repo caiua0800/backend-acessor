@@ -1,3 +1,5 @@
+// src/specialists/financeSpecialist.ts
+
 import * as financeService from "../services/financeService";
 import * as googleService from "../services/googleService";
 import * as aiService from "../services/aiService";
@@ -24,7 +26,7 @@ interface FinanceIntention {
     | "clarification_needed"
     | "check_recurring"
     | "check_budget_forecast"
-    | "confirmation"; // <--- NOVO: Para parar o loop do "Sim"
+    | "confirmation";
 
   amount?: string;
   description?: string;
@@ -47,21 +49,16 @@ function cleanJsonOutput(rawOutput: string): string {
   return rawOutput;
 }
 
-// Helper para construir data ISO baseada no dia informado pelo usuário
 function buildDateFromDay(day: number): string {
   const now = moment().tz("America/Sao_Paulo");
-  // Se o dia informado for maior que o dia de hoje, assume que foi no mês passado (ex: hoje é 10, usuário diz "dia 28")
-  // Ou mantém no mês atual se for intenção futura. 
-  // Lógica padrão: Mesma competência (Mês atual).
   const date = now.clone().date(day);
-  return date.format(); // Retorna ISO
+  return date.format();
 }
 
 function sanitizeItem(item: FinanceItem): FinanceItem {
   let cleanDesc = item.description;
   let cleanDay = item.day_of_month;
 
-  // Regex para capturar "dia 1", "vence dia 10", etc.
   const dayRegex = /\b(?:dia|dt|vence|vencimento)\s*(\d{1,2})\b/gi;
   const match = dayRegex.exec(cleanDesc);
 
@@ -70,21 +67,16 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
       const d = parseInt(match[1]);
       if (d >= 1 && d <= 31) cleanDay = d;
     }
-    // Remove o "dia X" da descrição para ficar limpo
     cleanDesc = cleanDesc.replace(dayRegex, "").trim();
     cleanDesc = cleanDesc.replace(/\s+[-–,.]+\s*$/, "").trim();
   }
 
-  // CORREÇÃO CRÍTICA:
-  // Só marca como RECORRENTE se a IA identificou explicitamente (is_recurring)
-  // OU se a descrição contém palavras chave de repetição.
-  // NÃO força recorrente só porque tem dia.
-  const isReallyRecurring = item.is_recurring || /todo|mensal|fixo|assinatura/i.test(cleanDesc);
+  const isReallyRecurring =
+    item.is_recurring || /todo|mensal|fixo|assinatura/i.test(cleanDesc);
 
-  // Se tem dia mas NÃO é recorrente, calculamos a data ISO para ser um gasto pontual
   let finalDate = item.date;
   if (!isReallyRecurring && cleanDay && !finalDate) {
-      finalDate = buildDateFromDay(cleanDay);
+    finalDate = buildDateFromDay(cleanDay);
   }
 
   return {
@@ -92,7 +84,7 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
     description: cleanDesc,
     day_of_month: cleanDay,
     is_recurring: isReallyRecurring,
-    date: finalDate
+    date: finalDate,
   };
 }
 
@@ -108,7 +100,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       IMPORTANTE: Só marque "is_recurring": true se for algo FIXO (Todo mês, Assinatura, Aluguel). Se for gasto comum ("Uber dia 1"), é false.
     
     - "check_recurring": Consultar total de gastos fixos.
-    - "check_budget_forecast": O usuário quer saber "Quanto sobra do Teto menos Fixos?".
+    - "check_budget_forecast": O usuário quer saber "Quanto sobra do Teto?", "Quanto tenho pra gastar?", "Previsão de caixa".
     - "add_investment": Investimentos.
     - "configure_settings": Definir Renda, TETO/LIMITE ou Saldo.
     - "list_report": Relatório geral ("Manda escrito", "Resumo", "Situação").
@@ -135,13 +127,12 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     const jsonString = cleanJsonOutput(rawJsonString);
     const data: FinanceIntention = JSON.parse(jsonString);
 
-    // --- BLOQUEIO DO LOOP DE IDIOTA ---
     if (data.intent === "confirmation") {
-        return await aiService.generatePersonaResponse(
-            "O usuário confirmou que está tudo certo. Responda com algo curto e positivo tipo 'Show!', 'Maravilha!', 'Combinado'.",
-            fullMessage,
-            userConfig
-        );
+      return await aiService.generatePersonaResponse(
+        "O usuário confirmou que está tudo certo. Responda com algo curto e positivo tipo 'Show!', 'Maravilha!', 'Combinado'.",
+        fullMessage,
+        userConfig
+      );
     }
 
     if (data.intent === "clarification_needed") {
@@ -168,10 +159,9 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       const responses: string[] = [];
 
       for (let item of items) {
-        item = sanitizeItem(item); // Agora sanitizeItem não força recorrente erradamente
+        item = sanitizeItem(item);
         if (!item.amount || !item.description) continue;
 
-        // SE FOR RECORRENTE (FIXO)
         if (item.is_recurring && item.day_of_month) {
           try {
             const created = await financeService.addRecurringTransaction(waId, {
@@ -188,21 +178,22 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
             console.error(err);
             responses.push(`❌ Erro em: ${item.description}`);
           }
-        } 
-        // SE FOR TRANSAÇÃO COMUM (MESMO QUE TENHA DATA ESPECÍFICA)
-        else {
+        } else {
           try {
             await financeService.addTransaction(waId, {
               amount: item.amount,
               type: item.type || "expense",
               category: item.category || "Geral",
               description: item.description,
-              date: item.date, // Passa a data calculada (ex: dia 1 do mês atual)
+              date: item.date,
             });
-            
-            // Formata a data para a resposta ficar clara
-            const dateInfo = item.date ? ` (${moment(item.date).format('DD/MM')})` : "";
-            responses.push(`✅ Registrado: ${item.description}: R$ ${item.amount}${dateInfo}`);
+
+            const dateInfo = item.date
+              ? ` (${moment(item.date).format("DD/MM")})`
+              : "";
+            responses.push(
+              `✅ Registrado: ${item.description}: R$ ${item.amount}${dateInfo}`
+            );
           } catch (err) {
             console.error(err);
             responses.push(`❌ Erro em: ${item.description}`);
@@ -218,24 +209,33 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       }
     }
 
-    // B. PLANEJAMENTO (TETO - FIXOS)
+    // B. PLANEJAMENTO (TETO - GASTOS - FIXOS PENDENTES)
     else if (data.intent === "check_budget_forecast") {
       const limit = currentReport.config.limite_estipulado || 0;
-      const recurringData = await financeService.getRecurringExpensesTotal(
-        waId
-      );
-      const fixedTotal = recurringData.total || 0;
 
       if (limit <= 0) {
-        actionConfirmedMessage = `⚠️ Seu Teto de Gastos é R$ 0,00. Defina um limite para eu calcular a sobra.`;
+        actionConfirmedMessage = `⚠️ Você ainda não configurou um **Teto de Gastos**. Defina um limite (ex: "Meu teto é 3000") para eu calcular quanto você ainda pode gastar.`;
       } else {
-        const remaining = limit - fixedTotal;
+        const spentSoFar = currentReport.resumo_mes.gastos || 0;
+        const pendingRecurring =
+          await financeService.getPendingRecurringExpensesTotal(waId);
+
+        const available = limit - spentSoFar - pendingRecurring;
+        const currentBalance = currentReport.saldo_atual_conta;
+
         actionConfirmedMessage =
-          `📊 *Planejamento Financeiro*\n\n` +
-          `🎯 *Teto:* R$ ${limit.toFixed(2)}\n` +
-          `🔄 *Fixos:* - R$ ${fixedTotal.toFixed(2)}\n` +
-          `------------------\n` +
-          `💵 *Sobra Livre:* R$ ${remaining.toFixed(2)}\n`;
+          `📊 *Previsão de Caixa*\n\n` +
+          `🎯 *Seu Teto:* R$ ${limit.toFixed(2)}\n` +
+          `💸 *Já Gastou:* - R$ ${spentSoFar.toFixed(2)}\n` +
+          `📅 *Contas Fixas (Pendentes):* - R$ ${pendingRecurring.toFixed(
+            2
+          )}\n` +
+          `--------------------------\n` +
+          `💰 *Disponível pra Gastar:* R$ ${available.toFixed(2)}\n` +
+          (available < 0
+            ? `⚠️ *Atenção:* Você já estourou seu orçamento planejado!\n`
+            : ``) +
+          `\n🏦 *Saldo Atual na Conta:* R$ ${currentBalance.toFixed(2)}`;
       }
     }
 
@@ -259,7 +259,6 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
     // D. CONFIGURAR
     else if (data.intent === "configure_settings") {
       let balanceVal = data.current_balance;
-      // Lógica de saldo manual
       if (
         !balanceVal &&
         data.items &&
@@ -324,21 +323,21 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
         let forecastText = "";
 
         if (limit > 0) {
-          const recurringData = await financeService.getRecurringExpensesTotal(
-            waId
-          );
-          const fixedTotal = recurringData.total || 0;
-          const remaining = limit - fixedTotal;
-          forecastText = `\n🎯 *Teto:* R$ ${limit}\n🔄 *Fixos:* -R$ ${fixedTotal}\n💵 *Sobra Planejada:* R$ ${remaining.toFixed(
+          const pendingRecurring =
+            await financeService.getPendingRecurringExpensesTotal(waId);
+          const available =
+            limit - updatedReport.resumo_mes.gastos - pendingRecurring;
+
+          forecastText = `\n🎯 *Teto:* R$ ${limit}\n📅 *Fixos (Falta cair):* R$ ${pendingRecurring.toFixed(
             2
-          )}\n`;
+          )}\n💵 *Livre pra Gastar:* R$ ${available.toFixed(2)}\n`;
         }
 
         actionConfirmedMessage =
           `📝 *Resumo Financeiro:*\n\n` +
           `💰 *Saldo Atual:* R$ ${updatedReport.saldo_atual_conta}\n` +
           `📉 *Gastos do Mês:* R$ ${updatedReport.resumo_mes.gastos}\n` +
-          `${forecastText}\n` + 
+          `${forecastText}\n` +
           `_Estes são os dados registrados no momento._`;
       }
     }

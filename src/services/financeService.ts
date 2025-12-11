@@ -49,10 +49,9 @@ export const setFinanceSettings = async (
 
 // --- 3. ADICIONAR TRANSAÇÃO ---
 export const addTransaction = async (whatsappId: string, data: any) => {
-  const userId = await getUserId(whatsappId); // Função helper getUserId já existente
+  const userId = await getUserId(whatsappId);
   return addTransactionByUserId(userId, data);
 };
-
 
 // --- 4. RELATÓRIO COMPLETO ---
 export const getFinanceReport = async (whatsappId: string) => {
@@ -79,6 +78,27 @@ export const addInvestment = async (
 export const listInvestments = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
   return listInvestmentsByUserId(userId);
+};
+
+// --- 7. GASTOS FIXOS PENDENTES (NOVO) ---
+export const getPendingRecurringExpensesTotal = async (whatsappId: string) => {
+  const userId = await getUserId(whatsappId);
+
+  // Define o mês atual (ex: '2023-10') para comparar com last_processed_at
+  const currentMonthStr = moment().tz("America/Sao_Paulo").format("YYYY-MM");
+
+  // Soma as recorrências ativas que são despesas E que ainda não foram processadas neste mês
+  const res = await pool.query(
+    `SELECT SUM(amount) as total 
+     FROM recurring_transactions 
+     WHERE user_id = $1 
+     AND (active = TRUE OR active IS NULL) 
+     AND type = 'expense'
+     AND (last_processed_at IS NULL OR TO_CHAR(last_processed_at, 'YYYY-MM') != $2)`,
+    [userId, currentMonthStr]
+  );
+
+  return parseFloat(res.rows[0].total || 0);
 };
 
 // ============================================================================
@@ -149,14 +169,10 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
   const amountVal = Math.abs(parseMoney(data.amount));
   const type = data.type ? data.type.toLowerCase().trim() : "expense";
 
-  // Lógica de Data Robusta
   let transactionDate = new Date();
   if (data.date) {
-    // Tenta interpretar a data vinda do bot (YYYY-MM-DD ou ISO)
     const d = new Date(data.date);
-    // Se for data válida e não "Invalid Date", usa ela.
     if (!isNaN(d.getTime())) {
-      // Ajuste de fuso horário simples (para garantir que dia 1 seja dia 1)
       transactionDate = d;
     }
   }
@@ -165,7 +181,6 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
   try {
     await client.query("BEGIN");
 
-    // Lógica de Saldo
     const settingsRes = await client.query(
       `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
       [userId]
@@ -173,7 +188,9 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
 
     let currentBalance = 0;
     if (settingsRes.rows.length > 0) {
-      currentBalance = parseFloat(settingsRes.rows[0].current_account_amount || 0);
+      currentBalance = parseFloat(
+        settingsRes.rows[0].current_account_amount || 0
+      );
     } else {
       await client.query(
         `INSERT INTO finance_settings (user_id, current_account_amount, estimated_monthly_income, spending_limit) VALUES ($1, 0, 0, 0)`,
@@ -182,9 +199,11 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
     }
 
     const beforeAmount = currentBalance;
-    let afterAmount = type === "income" ? currentBalance + amountVal : currentBalance - amountVal;
+    let afterAmount =
+      type === "income"
+        ? currentBalance + amountVal
+        : currentBalance - amountVal;
 
-    // Inserção
     await client.query(
       `INSERT INTO transactions 
        (user_id, amount, type, category, description, receipt_url, transaction_date, before_account_amount, current_account_amount, created_at)
@@ -198,11 +217,10 @@ export const addTransactionByUserId = async (userId: string, data: any) => {
         data.receipt_url || null,
         transactionDate,
         beforeAmount,
-        afterAmount
+        afterAmount,
       ]
     );
 
-    // Atualiza Saldo na tabela de settings
     await client.query(
       `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
       [afterAmount, userId]
@@ -337,7 +355,6 @@ export const addRecurringTransactionByUserId = async (
   const amountVal = Math.abs(parseMoney(data.amount));
   const type = data.type ? data.type.toLowerCase().trim() : "expense";
 
-  // Se o dia não for informado, usa o dia atual
   let day = data.day_of_month ? parseInt(data.day_of_month) : moment().date();
   if (day < 1) day = 1;
   if (day > 31) day = 31;
@@ -360,20 +377,17 @@ export const addRecurringTransactionByUserId = async (
   return res.rows[0];
 };
 
-// 2. PROCESSAR RECORRÊNCIAS DO DIA (CRON JOB)
 export const processDailyRecurringTransactions = async () => {
   const client = await pool.connect();
-  // Garante fuso horário correto para não rodar no dia errado
   const today = moment().tz("America/Sao_Paulo");
   const currentDay = today.date();
-  const currentMonthStr = today.format("YYYY-MM"); // Ex: 2023-12
+  const currentMonthStr = today.format("YYYY-MM");
 
   console.log(
     `🔄 [CRON FINANCEIRO] Buscando contas fixas para o dia ${currentDay}...`
   );
 
   try {
-    // Busca tudo que vence hoje, está ativo, E AINDA NÃO FOI PROCESSADO ESTE MÊS
     const res = await client.query(
       `SELECT * FROM recurring_transactions 
        WHERE day_of_month = $1 
@@ -395,7 +409,6 @@ export const processDailyRecurringTransactions = async () => {
       try {
         await client.query("BEGIN");
 
-        // --- LÓGICA DE SALDO (Cópia simplificada do addTransaction) ---
         const settingsRes = await client.query(
           `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
           [item.user_id]
@@ -420,7 +433,6 @@ export const processDailyRecurringTransactions = async () => {
         if (item.type === "income") afterAmount += amountVal;
         else afterAmount -= amountVal;
 
-        // 1. Insere a transação no extrato
         await client.query(
           `INSERT INTO transactions 
            (user_id, amount, type, category, description, transaction_date, before_account_amount, current_account_amount, created_at)
@@ -430,19 +442,17 @@ export const processDailyRecurringTransactions = async () => {
             amountVal,
             item.type,
             item.category,
-            `${item.description} (Automático)`, // Identificador
+            `${item.description} (Automático)`,
             beforeAmount,
             afterAmount,
           ]
         );
 
-        // 2. Atualiza saldo do usuário
         await client.query(
           `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
           [afterAmount, item.user_id]
         );
 
-        // 3. Marca a recorrência como processada (para não rodar dnv hoje/este mês)
         await client.query(
           `UPDATE recurring_transactions SET last_processed_at = NOW() WHERE id = $1`,
           [item.id]
@@ -475,7 +485,6 @@ export const addRecurringTransaction = async (
 export const getRecurringExpensesTotal = async (whatsappId: string) => {
   const userId = await getUserId(whatsappId);
 
-  // Soma total de despesas ativas
   const res = await pool.query(
     `SELECT SUM(amount) as total 
      FROM recurring_transactions 
@@ -484,10 +493,9 @@ export const getRecurringExpensesTotal = async (whatsappId: string) => {
      AND type = 'expense'`,
     [userId]
   );
-  
+
   const total = parseFloat(res.rows[0].total || 0);
 
-  // Pega a lista detalhada
   const listRes = await pool.query(
     `SELECT description, amount, day_of_month 
      FROM recurring_transactions 
@@ -515,14 +523,12 @@ export const searchTransactionsByUserId = async (
   categoryFilter?: string,
   descriptionFilter?: string
 ) => {
-  // Queries base
   let countQuery = `SELECT COUNT(*) FROM transactions WHERE user_id = $1`;
   let dataQuery = `SELECT id, amount, type, category, description, transaction_date FROM transactions WHERE user_id = $1`;
 
   const baseParams = [userId];
-  let filterIndex = 2; // O primeiro parâmetro ($1) é sempre o userId
+  let filterIndex = 2;
 
-  // 1. Constrói a cláusula WHERE para filtros
   const whereClauses = [];
 
   if (categoryFilter) {
@@ -531,8 +537,6 @@ export const searchTransactionsByUserId = async (
   }
 
   if (descriptionFilter) {
-    // unaccent(): Remove acentos (requer a extensão unaccent no seu DB)
-    // LOWER() e ILIKE: Garantem que a comparação seja case-insensitive.
     whereClauses.push(
       `unaccent(LOWER(description)) ILIKE unaccent(LOWER($${filterIndex++}))`
     );
@@ -545,20 +549,16 @@ export const searchTransactionsByUserId = async (
     dataQuery += ` AND ${whereCondition}`;
   }
 
-  // 2. Query para o total count (usa os mesmos parâmetros de filtro)
   const totalCountRes = await pool.query(countQuery, baseParams);
   const totalCount = parseInt(totalCountRes.rows[0].count, 10);
 
-  // 3. Query para todas as categorias (para o filtro do frontend)
   const categoryRes = await pool.query(
     "SELECT DISTINCT category FROM transactions WHERE user_id = $1 AND category IS NOT NULL ORDER BY category ASC",
     [userId]
   );
   const categories = categoryRes.rows.map((row) => row.category);
 
-  // 4. Query para os dados paginados
   const dataParams = [...baseParams];
-  // Adiciona ORDER BY, LIMIT e OFFSET no final
   dataQuery += ` ORDER BY transaction_date DESC LIMIT $${filterIndex++} OFFSET $${filterIndex++}`;
 
   dataParams.push(limit.toString());
@@ -589,14 +589,12 @@ export const listRecurringTransactionsByUserId = async (
   limit: number,
   offset: number
 ) => {
-  // 1. Conta o total de registros para esse usuário
   const countRes = await pool.query(
     "SELECT COUNT(*) FROM recurring_transactions WHERE user_id = $1",
     [userId]
   );
   const total = parseInt(countRes.rows[0].count, 10);
 
-  // 2. Busca os dados paginados
   const res = await pool.query(
     `SELECT * FROM recurring_transactions 
      WHERE user_id = $1 
@@ -613,15 +611,15 @@ export const listRecurringTransactionsByUserId = async (
     category: row.category,
     day_of_month: row.day_of_month,
     active: row.active,
-    last_processed_at: row.last_processed_at
+    last_processed_at: row.last_processed_at,
   }));
 
   return {
     items,
     total,
-    page: (offset / limit) + 1,
+    page: offset / limit + 1,
     limit,
-    total_pages: Math.ceil(total / limit)
+    total_pages: Math.ceil(total / limit),
   };
 };
 
@@ -633,12 +631,11 @@ export const searchInvestmentsByUserId = async (
 ) => {
   let countQuery = `SELECT COUNT(*) FROM investments WHERE user_id = $1`;
   let dataQuery = `SELECT * FROM investments WHERE user_id = $1`;
-  
+
   const params: any[] = [userId];
   let paramIndex = 2;
 
   if (assetNameFilter) {
-    // Filtro insensível a maiúsculas/minúsculas e acentos
     const clause = ` AND unaccent(LOWER(asset_name)) ILIKE unaccent(LOWER($${paramIndex}))`;
     countQuery += clause;
     dataQuery += clause;
@@ -646,29 +643,31 @@ export const searchInvestmentsByUserId = async (
     paramIndex++;
   }
 
-  // Pega o total para a paginação
-  const countRes = await pool.query(countQuery, params.slice(0, paramIndex - 1));
+  const countRes = await pool.query(
+    countQuery,
+    params.slice(0, paramIndex - 1)
+  );
   const total = parseInt(countRes.rows[0].count, 10);
 
-  // Adiciona ordenação e paginação
-  dataQuery += ` ORDER BY investment_date DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+  dataQuery += ` ORDER BY investment_date DESC LIMIT $${paramIndex} OFFSET $${
+    paramIndex + 1
+  }`;
   params.push(limit, offset);
 
   const dataRes = await pool.query(dataQuery, params);
 
   return {
-    investments: dataRes.rows.map(row => ({
+    investments: dataRes.rows.map((row) => ({
       ...row,
-      amount: parseFloat(row.amount) // Garante que venha como number
+      amount: parseFloat(row.amount),
     })),
     total,
-    page: (offset / limit) + 1,
+    page: offset / limit + 1,
     limit,
-    total_pages: Math.ceil(total / limit)
+    total_pages: Math.ceil(total / limit),
   };
 };
 
-// 2. Atualizar Investimento
 export const updateInvestmentByUserId = async (
   userId: string,
   investmentId: string,
@@ -683,9 +682,9 @@ export const updateInvestmentByUserId = async (
     fields.push(`asset_name = $${paramIndex++}`);
     values.push(assetName);
   }
-  
+
   if (amount !== undefined) {
-    const val = parseMoney(amount); // Reutiliza seu parser seguro
+    const val = parseMoney(amount);
     if (val <= 0) throw new Error("O valor deve ser positivo.");
     fields.push(`amount = $${paramIndex++}`);
     values.push(val);
@@ -693,12 +692,9 @@ export const updateInvestmentByUserId = async (
 
   if (fields.length === 0) throw new Error("Nenhum dado para atualizar.");
 
-  // Adiciona timestamp de update
   fields.push(`updated_at = NOW()`);
-
-  // Adiciona IDs para o WHERE
   values.push(investmentId, userId);
-  
+
   const query = `
     UPDATE investments 
     SET ${fields.join(", ")} 
@@ -710,8 +706,10 @@ export const updateInvestmentByUserId = async (
   return res.rows[0];
 };
 
-// 3. Deletar Investimento
-export const deleteInvestmentByUserId = async (userId: string, investmentId: string) => {
+export const deleteInvestmentByUserId = async (
+  userId: string,
+  investmentId: string
+) => {
   const res = await pool.query(
     "DELETE FROM investments WHERE id = $1 AND user_id = $2 RETURNING id",
     [investmentId, userId]
