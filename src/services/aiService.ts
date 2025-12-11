@@ -17,6 +17,11 @@ export function getSaoPauloTime(): string {
   return saoPauloTime.format("YYYY-MM-DD HH:mm:ss Z");
 }
 
+export function getCurrentTime(timezone: string = "America/Sao_Paulo"): string {
+  // Isso garante que a IA receba a hora LOCAL do usuário
+  return moment().tz(timezone).format("YYYY-MM-DD HH:mm:ss Z");
+}
+
 async function grokCompletion(
   systemPrompt: string,
   userMessage: string,
@@ -90,9 +95,10 @@ export async function identifyTasks(
 
 export async function extractData(
   systemPrompt: string,
-  userMessage: string
+  userMessage: string,
+  userTimezone: string = "America/Sao_Paulo" // <--- Novo parâmetro
 ): Promise<string> {
-  const finalPrompt = `[DATA/HORA ATUAL: ${getSaoPauloTime()}]\n${systemPrompt}`;
+  const finalPrompt = `[DATA/HORA ATUAL DO USUÁRIO: ${getCurrentTime(userTimezone)} (Fuso: ${userTimezone})]\n${systemPrompt}`;
   return await grokCompletion(finalPrompt, userMessage, FAST_MODEL_ID, true);
 }
 

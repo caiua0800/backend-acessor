@@ -55,7 +55,6 @@ interface CountData {
   search_term: string;
   year?: number;
 }
-// NOVO: Interface para o novo Intent de confirmação
 interface ConfirmReminderData {
   intent: "confirm_reminder";
   search_term?: string;
@@ -71,7 +70,7 @@ type CalendarExtractionData =
   | ReminderData
   | SyncData
   | CountData
-  | ConfirmReminderData; // <--- Adiciona aqui
+  | ConfirmReminderData;
 
 // ============================================================================
 // 2. HELPERS
@@ -105,18 +104,29 @@ function cleanJsonOutput(rawOutput: string): string {
   return rawOutput;
 }
 
-function parseEventDates(data: any): { start: string; end: string } {
+// --- FUNÇÃO ATUALIZADA PARA TIMEZONE ---
+function parseEventDates(
+  data: any,
+  userTimezone: string
+): { start: string; end: string } {
   let startIso = data.start;
   let endIso = data.end;
 
+  // Caso 1: A IA extraiu data e hora separadas (Ex: "2025-12-11" e "14:30")
   if (!startIso && data.date && data.time) {
-    const cleanTime = data.time.replace(" -03:00", "").trim();
+    const cleanTime = data.time.replace(/ -0[0-9]:00/, "").trim();
     const dateTimeStr = `${data.date}T${cleanTime}:00`;
-    startIso = moment.tz(dateTimeStr, "America/Sao_Paulo").format();
+
+    // Interpreta a string como sendo do fuso do usuário
+    startIso = moment.tz(dateTimeStr, userTimezone).format();
   }
+
+  // Caso 2: A IA extraiu um datetime completo
   if (!startIso && data.datetime) {
-    startIso = moment(data.datetime).tz("America/Sao_Paulo").format();
+    startIso = moment.tz(data.datetime, userTimezone).format();
   }
+
+  // Se temos o início mas não o fim, definimos 1 hora de duração padrão
   if (startIso && !endIso) {
     endIso = moment(startIso).add(1, "hour").format();
   }
@@ -213,12 +223,19 @@ export async function calendarSpecialist(
   const { waId, fullMessage, userConfig } = context;
   console.log("🚀 [CALENDAR SPECIALIST] Iniciado.", fullMessage);
 
+  // 1. PEGA O TIMEZONE (Com Fallback para SP)
+  const userTz = userConfig.timezone || "America/Sao_Paulo";
+
+  // 2. GERA HORA ATUAL BASEADA NO FUSO DO USUÁRIO
+  const userCurrentTime = moment().tz(userTz).format("YYYY-MM-DD HH:mm:ss Z");
+
   const recentHistory = await memoryService.loadRecentHistory(waId, 3);
   const currentYear = new Date().getFullYear();
 
   const extractionPrompt = `
     Extrator de Agenda.
-    DATA/HORA ATUAL: ${aiService.getSaoPauloTime()}
+    DATA/HORA ATUAL DO USUÁRIO: ${userCurrentTime}
+    FUSO HORÁRIO: ${userTz}
     HISTÓRICO RECENTE: ${recentHistory}
     
     INTENÇÕES:
@@ -257,7 +274,7 @@ export async function calendarSpecialist(
     let offerReminder = false;
     const userId = await getUserId(waId);
 
-    // 0. AGENDAR (CORRIGIDO PARA EXIBIR MEET)
+    // 0. AGENDAR
     if (
       Array.isArray(data) ||
       data.intent === "create_event" ||
@@ -271,18 +288,21 @@ export async function calendarSpecialist(
 
       for (const rawEvent of eventsToCreate) {
         const summary = rawEvent.summary || rawEvent.title;
-        const dates = parseEventDates(rawEvent);
+
+        // --- CORREÇÃO: PASSANDO O FUSO DO USUÁRIO ---
+        const dates = parseEventDates(rawEvent, userTz);
 
         if (!summary || !dates.start) continue;
 
         try {
-          // Chama o serviço (que agora gera o Meet Link sempre)
+          // Chama o serviço (passando timeZone para o Google)
           const result = await googleService.createEvent(waId, {
             summary,
             description: rawEvent.description || "Agendado via WhatsApp",
             start: dates.start,
             end: dates.end,
             attendees: rawEvent.attendees,
+            timeZone: userTz, // <--- Importante para o Google Calendar
           });
 
           // --- FORMATAÇÃO DA RESPOSTA COM LINK ---
@@ -291,10 +311,13 @@ export async function calendarSpecialist(
             details += `\n📹 **Google Meet:** ${result.meetLink}`;
           }
 
+          // Formata a data de exibição usando o fuso do usuário também
+          const displayDate = moment(dates.start)
+            .tz(userTz)
+            .format("DD/MM HH:mm");
+
           scheduledEvents.push(
-            `✅ *${summary}*\n🕒 ${moment(dates.start).format(
-              "DD/MM HH:mm"
-            )}\n${details}`
+            `✅ *${summary}*\n🕒 ${displayDate}\n${details}`
           );
 
           // Notificação
@@ -324,11 +347,11 @@ export async function calendarSpecialist(
       }
     }
 
-    // NOVO: 1. CONFIRMAR LEMBRETE PENDENTE
+    // 1. CONFIRMAR LEMBRETE PENDENTE
     else if (data.intent === "confirm_reminder") {
       const events = await googleService.listEvents(waId);
 
-      // Encontra o evento futuro mais recente (assumindo que é o evento recém-criado)
+      // Encontra o evento futuro mais recente
       const lastEvent = events.find((e: any) =>
         moment(e.start).isAfter(moment())
       );
@@ -337,7 +360,6 @@ export async function calendarSpecialist(
         const time = new Date(lastEvent.start);
         const min = 15; // Padrão 15 minutos
 
-        // Agendar Notificação
         await notificationService.scheduleNotification(
           userId,
           `📅 Lembrete (Confirmação): "${lastEvent.summary}"`,
@@ -370,7 +392,8 @@ export async function calendarSpecialist(
       actionConfirmedMessage = ev.length
         ? `📅 **Agenda ${moment(data.date).format("DD/MM")}**:\n\n${ev
             .map(
-              (e: any) => `• ${moment(e.start).format("HH:mm")} - ${e.summary}`
+              (e: any) =>
+                `• ${moment(e.start).tz(userTz).format("HH:mm")} - ${e.summary}`
             )
             .join("\n")}`
         : `Nada agendado para ${moment(data.date).format("DD/MM")}.`;
@@ -427,7 +450,6 @@ export async function calendarSpecialist(
           actionConfirmedMessage = `✅ Aviso agendado para "${target.summary}"!`;
         }
       } else {
-        // LÓGICA DE FALLBACK PROATIVA
         actionConfirmedMessage = `Não achei nada agendado como "${data.search_term}" para colocar alerta. Quer que eu agende isso como um novo compromisso?`;
       }
     }
@@ -451,7 +473,9 @@ export async function calendarSpecialist(
         ? `Próximos:\n${ev
             .map(
               (e: any) =>
-                `• ${e.summary} (${moment(e.start).format("DD/MM HH:mm")})`
+                `• ${e.summary} (${moment(e.start)
+                  .tz(userTz)
+                  .format("DD/MM HH:mm")})`
             )
             .join("\n")}`
         : "Agenda vazia.";

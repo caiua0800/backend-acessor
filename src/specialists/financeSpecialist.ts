@@ -52,13 +52,13 @@ function cleanJsonOutput(rawOutput: string): string {
   return rawOutput;
 }
 
-function buildDateFromDay(day: number): string {
-  const now = moment().tz("America/Sao_Paulo");
+function buildDateFromDay(day: number, userTimezone: string): string {
+  const now = moment().tz(userTimezone); // <--- Usa o fuso do usuário
   const date = now.clone().date(day);
   return date.format();
 }
 
-function sanitizeItem(item: FinanceItem): FinanceItem {
+function sanitizeItem(item: FinanceItem, userTimezone: string): FinanceItem {
   let cleanDesc = item.description;
   let cleanDay = item.day_of_month;
 
@@ -84,7 +84,7 @@ function sanitizeItem(item: FinanceItem): FinanceItem {
   // Se for recorrente, não precisa de data exata (usa day_of_month).
   // Se for pontual e tiver dia, constrói a data desse mês.
   if (!isReallyRecurring && cleanDay && !finalDate) {
-    finalDate = buildDateFromDay(cleanDay);
+    finalDate = buildDateFromDay(cleanDay, userTimezone); // <--- Passa aqui
   }
 
   return {
@@ -157,7 +157,7 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
         userConfig
       );
     }
-
+    const userTz = userConfig.timezone || "America/Sao_Paulo";
     let actionConfirmedMessage = "";
     let processedCount = 0;
 
@@ -173,7 +173,8 @@ export async function financeSpecialist(context: UserContext): Promise<string> {
       const responses: string[] = [];
 
       for (let item of items) {
-        item = sanitizeItem(item);
+        item = sanitizeItem(item, userTz);
+        
         if (!item.amount || !item.description) continue;
 
         if (item.is_recurring && item.day_of_month) {

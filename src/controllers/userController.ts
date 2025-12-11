@@ -17,11 +17,19 @@ export const createUser = async (req: Request, res: Response) => {
       agent_gender,
       agent_voice_id,
       agent_personality,
-      // NOVO: Recebe o token do Google do Frontend
-      google_refresh_token 
+      google_refresh_token,
+      timezone,
+      language,
     } = req.body;
 
-    if (!full_name || !email || !password || !country_code || !area_code || !phone_number) {
+    if (
+      !full_name ||
+      !email ||
+      !password ||
+      !country_code ||
+      !area_code ||
+      !phone_number
+    ) {
       return res.status(400).json({ error: "Campos obrigatórios faltando." });
     }
 
@@ -38,6 +46,8 @@ export const createUser = async (req: Request, res: Response) => {
       agentVoiceId: agent_voice_id,
       agentPersonality: agent_personality,
       googleRefreshToken: google_refresh_token,
+      timezone: timezone || "America/Sao_Paulo",
+      language: language || "Português (Brasil)",
     });
 
     res.json({
@@ -47,7 +57,9 @@ export const createUser = async (req: Request, res: Response) => {
     });
   } catch (e: any) {
     if (e.code === "23505") {
-      return res.status(409).json({ error: "E-mail ou telefone já cadastrado." });
+      return res
+        .status(409)
+        .json({ error: "E-mail ou telefone já cadastrado." });
     }
     res.status(500).json({ error: e.message });
   }

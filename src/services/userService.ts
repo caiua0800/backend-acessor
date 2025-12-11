@@ -13,7 +13,9 @@ interface UserData {
   agentGender?: string;
   agentVoiceId?: string;
   agentPersonality?: string[];
-  googleRefreshToken?: string; // <--- NOVO
+  googleRefreshToken?: string;
+  timezone?: string;
+  language?: string;
 }
 
 // --- HELPER CRÍTICO: Formatação de Telefone (Reutilizável) ---
@@ -80,8 +82,9 @@ export const createNewUser = async (data: UserData) => {
 
     // 6. Cria as Configurações
     await client.query(
-      `INSERT INTO user_configs (user_id, user_nickname, agent_nickname, agent_gender, agent_voice_id, agent_personality)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO user_configs 
+       (user_id, user_nickname, agent_nickname, agent_gender, agent_voice_id, agent_personality, timezone, language) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, // <--- Adicionado $8 e coluna language
       [
         userId,
         data.userNickname || null,
@@ -89,19 +92,21 @@ export const createNewUser = async (data: UserData) => {
         data.agentGender || "Masculino",
         data.agentVoiceId || null,
         data.agentPersonality || ["Amigo", "Eficiente"],
+        data.timezone || "America/Sao_Paulo",
+        data.language || "Português (Brasil)", // <--- Valor do $8
       ]
     );
 
     // 7. CRÍTICO: Insere o token do Google se ele veio
     if (data.googleRefreshToken) {
-        console.log("Integrando Google Refresh Token no cadastro.");
-        await client.query(
-            `INSERT INTO user_integrations (user_id, google_refresh_token, google_home_connected, updated_at)
+      console.log("Integrando Google Refresh Token no cadastro.");
+      await client.query(
+        `INSERT INTO user_integrations (user_id, google_refresh_token, google_home_connected, updated_at)
              VALUES ($1, $2, TRUE, NOW())`,
-            [userId, data.googleRefreshToken]
-        );
+        [userId, data.googleRefreshToken]
+      );
     }
-    
+
     // 8. Confirma a Transação
     await client.query("COMMIT");
 
@@ -152,6 +157,21 @@ export const updatePhoneNumber = async (
   return res.rows[0];
 };
 
+export const getAgentConfig = async (userId: string) => {
+  const res = await pool.query(
+    `SELECT agent_nickname, agent_personality, agent_voice_id, language 
+     FROM user_configs 
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (res.rows.length === 0) {
+    throw new Error("Configurações não encontradas.");
+  }
+  
+  return res.rows[0];
+};
+
 // 3. ATUALIZAR CONFIGURAÇÕES DO USUÁRIO (NOVO)
 export const updateUserConfigs = async (
   userId: string,
@@ -161,14 +181,24 @@ export const updateUserConfigs = async (
     agentGender: string;
     agentVoiceId: string;
     agentPersonality: string[];
-    ai_send_audio: boolean; // Se você tiver adicionado esse campo
+    ai_send_audio: boolean;
+    language: string;
+    timezone: string;
   }>
 ) => {
   const fields = [];
   const values = [];
   let queryIndex = 1;
 
-  // Montagem dinâmica da query
+  if (data.language !== undefined) {
+    fields.push(`language = $${queryIndex++}`);
+    values.push(data.language);
+  }
+
+  if (data.timezone !== undefined) {
+    fields.push(`timezone = $${queryIndex++}`);
+    values.push(data.timezone);
+  }
   if (data.userNickname !== undefined) {
     fields.push(`user_nickname = $${queryIndex++}`);
     values.push(data.userNickname);

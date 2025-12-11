@@ -4,6 +4,7 @@ import * as aiService from "../services/aiService";
 import * as memoryService from "../services/memoryService";
 import { pool } from "../db";
 import { UserContext } from "../services/types";
+import moment from "moment";
 
 interface TodoItem {
   task: string;
@@ -55,6 +56,7 @@ function cleanJsonOutput(rawOutput: string): string {
 export async function todoSpecialist(context: UserContext): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
   console.log("🚀 [TODO SPECIALIST] Processando:", fullMessage);
+  const userTz = userConfig.timezone || "America/Sao_Paulo";
 
   // CORREÇÃO: Chama a nova função loadRecentHistory
   const recentHistory = await memoryService.loadRecentHistory(waId, 2);
@@ -62,7 +64,7 @@ export async function todoSpecialist(context: UserContext): Promise<string> {
   const extractionPrompt = `
     Gerente de Tarefas. Extraia a intenção em JSON.
     
-    AGORA: ${aiService.getSaoPauloTime()}
+    AGORA: ${moment().tz(userTz).format("YYYY-MM-DD HH:mm:ss")}
     
     INTENÇÕES:
     1. "add": Adicionar tarefa.

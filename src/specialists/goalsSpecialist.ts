@@ -4,6 +4,7 @@ import * as goalsService from "../services/goalsService";
 import * as aiService from "../services/aiService";
 import * as memoryService from "../services/memoryService"; // Importante para contexto
 import { UserContext } from "../services/types";
+import moment from "moment";
 
 // Interface para um item de ação de meta
 interface GoalActionItem {
@@ -87,13 +88,15 @@ function cleanJsonOutput(rawOutput: string): string {
 
 export async function goalsSpecialist(context: UserContext): Promise<string> {
   const { waId, fullMessage, userConfig } = context;
+  const userTz = userConfig.timezone || "America/Sao_Paulo";
 
   // 1. CARREGA O HISTÓRICO RECENTE (CRUCIAL para entender "Dia 15" como resposta)
   const history = await memoryService.loadRecentHistory(waId, 4);
+  const todayDate = moment().tz(userTz).format("YYYY-MM-DD");
 
   const extractionPrompt = `
     Você é um Gerente de Metas. Analise a mensagem e extraia as ações em JSON.
-    DATA DE HOJE: ${new Date().toISOString().split("T")[0]}
+    DATA DE HOJE: ${todayDate}
     
     HISTÓRICO RECENTE:
     ${history}

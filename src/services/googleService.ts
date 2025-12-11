@@ -404,6 +404,7 @@ export const countEvents = async (
   return parseInt(res.rows[0].count, 10);
 };
 
+// Substitua a função antiga por esta:
 export const createEvent = async (
   whatsappId: string,
   eventDetails: {
@@ -414,17 +415,22 @@ export const createEvent = async (
     attendees?: string[];
     recurrence_freq?: string;
     recurrence_count?: number;
+    timeZone?: string; // <--- NOVO PARÂMETRO
   }
 ) => {
   const { client, userId } = await getAuthenticatedClient(whatsappId);
   const calendar = google.calendar({ version: "v3", auth: client });
 
+  // Define o fuso alvo: usa o do usuário ou "America/Sao_Paulo" se não informado
+  const targetTimeZone = eventDetails.timeZone || "America/Sao_Paulo";
+
   let requestBody: any = {
     summary: eventDetails.summary,
     description: eventDetails.description,
-    start: { dateTime: eventDetails.start, timeZone: TIME_ZONE },
-    end: { dateTime: eventDetails.end, timeZone: TIME_ZONE },
-    // CORREÇÃO: Força a criação do Meet para todos os eventos
+    // Passamos o timeZone explicitamente para o Google Calendar
+    start: { dateTime: eventDetails.start, timeZone: targetTimeZone },
+    end: { dateTime: eventDetails.end, timeZone: targetTimeZone },
+    // Mantém a criação automática do Google Meet
     conferenceData: {
       createRequest: {
         requestId: uuidv4(),
@@ -433,27 +439,31 @@ export const createEvent = async (
     },
   };
 
+  // Configuração de recorrência (se houver)
   if (eventDetails.recurrence_freq) {
     const freq = eventDetails.recurrence_freq.toUpperCase();
     const count = eventDetails.recurrence_count || 365;
     requestBody.recurrence = [`RRULE:FREQ=${freq};COUNT=${count}`];
   }
 
+  // Convidados (se houver)
   if (eventDetails.attendees && eventDetails.attendees.length > 0) {
     requestBody.attendees = eventDetails.attendees.map((email) => ({ email }));
   }
 
+  // Chamada à API do Google
   const event = await calendar.events.insert({
     calendarId: "primary",
-    conferenceDataVersion: 1, // Essencial para o Meet
+    conferenceDataVersion: 1, 
     requestBody,
   });
 
+  // Salva no banco local para cache/sync
   await saveGoogleEventToDb(userId, event.data);
 
   return {
     link: event.data.htmlLink,
-    meetLink: event.data.hangoutLink || null, // Pega o link do Meet
+    meetLink: event.data.hangoutLink || null, 
   };
 };
 

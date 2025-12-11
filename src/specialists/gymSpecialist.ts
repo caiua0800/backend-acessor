@@ -27,7 +27,8 @@ function cleanJsonOutput(rawOutput: string): string {
 
 function getNextDayDate(
   dayName: string,
-  timeStr: string
+  timeStr: string,
+  userTimezone: string
 ): { start: string; end: string } | null {
   const daysMap: Record<string, number> = {
     sunday: 0,
@@ -56,7 +57,7 @@ function getNextDayDate(
     ];
   if (targetDay === undefined) return null;
 
-  const now = moment().tz("America/Sao_Paulo");
+  const now = moment().tz(userTimezone);
   const today = now.day();
 
   let diff = targetDay - today;
@@ -250,7 +251,8 @@ export async function gymSpecialist(context: UserContext): Promise<string> {
         let successCount = 0;
 
         for (const t of data.schedule_request.times) {
-          const dates = getNextDayDate(t.day, t.time);
+          const userTz = userConfig.timezone || "America/Sao_Paulo";
+          const dates = getNextDayDate(t.day, t.time, userTz);
           if (dates) {
             const workout = await gymService.getFullWeeklyPlan(waId);
             const dayWorkout = workout.find(
