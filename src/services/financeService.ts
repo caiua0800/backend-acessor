@@ -716,3 +716,49 @@ export const deleteInvestmentByUserId = async (
   );
   return (res.rowCount ?? 0) > 0;
 };
+
+
+export const getPendingRecurringExpensesTotalByUserId = async (userId: string) => {
+  // Define o mês atual (ex: '2023-10') para comparar com last_processed_at
+  const currentMonthStr = moment().tz("America/Sao_Paulo").format("YYYY-MM");
+
+  // Soma as recorrências ativas que são despesas E que ainda não foram processadas neste mês
+  const res = await pool.query(
+    `SELECT SUM(amount) as total 
+     FROM recurring_transactions 
+     WHERE user_id = $1 
+     AND (active = TRUE OR active IS NULL) 
+     AND type = 'expense'
+     AND (last_processed_at IS NULL OR TO_CHAR(last_processed_at, 'YYYY-MM') != $2)`,
+    [userId, currentMonthStr]
+  );
+
+  return parseFloat(res.rows[0].total || 0);
+};
+
+// 2. Função Principal que monta o objeto de previsão
+export const getBudgetForecastByUserId = async (userId: string) => {
+  // Reutiliza o relatório existente para pegar Gasto e Teto
+  const report = await getFinanceReportByUserId(userId);
+  
+  // Pega o pendente fixo
+  const pendingRecurring = await getPendingRecurringExpensesTotalByUserId(userId);
+
+  const limit = report.config.limite_estipulado || 0;
+  const spentSoFar = report.resumo_mes.gastos || 0;
+  
+  // O Cálculo Mágico
+  const available = limit - spentSoFar - pendingRecurring;
+
+  return {
+    currency: report.moeda,
+    current_account_balance: report.saldo_atual_conta,
+    forecast: {
+      spending_limit: limit,
+      spent_so_far: spentSoFar,
+      pending_recurring: pendingRecurring,
+      available_to_spend: available,
+      status: available < 0 ? "negative" : "positive"
+    }
+  };
+};

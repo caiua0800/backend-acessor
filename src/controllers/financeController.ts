@@ -151,6 +151,19 @@ export const listRecurring = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const getForecast = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!;
+    
+    const forecast = await financeService.getBudgetForecastByUserId(userId);
+    
+    // Retorna os dados calculados
+    res.json(forecast);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
 // GET /finance/investments (Para listar investimentos)
 export const getInvestments = async (req: AuthRequest, res: Response) => {
   try {

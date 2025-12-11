@@ -9,12 +9,14 @@ import {
   addRecurring,
   searchTransactions,
   listRecurring,
+  getForecast,
 } from "../controllers/financeController";
 
 const router = Router();
 
 router.use(authenticateToken);
 
+router.get("/forecast", getForecast);
 router.post("/settings", updateSettings);
 router.post("/transaction", add); 
 router.post("/recurring", addRecurring);
