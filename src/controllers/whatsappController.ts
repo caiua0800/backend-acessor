@@ -63,6 +63,7 @@ const processAndRespond = async (waId: string) => {
       ai_send_audio: dbConfig.ai_send_audio,
       agent_voice_id: dbConfig.agent_voice_id,
       timezone: dbConfig.timezone || "America/Sao_Paulo",
+      language: dbConfig.language || "Português (Brasil)",
     };
 
     const context = { waId, fullMessage, userName, userConfig };

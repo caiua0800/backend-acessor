@@ -107,13 +107,19 @@ export async function generatePersonaResponse(
   userMessage: string,
   userConfig: any
 ): Promise<string> {
+  
   const systemPrompt = `
     IDENTIDADE DO AGENTE:
     Nome: ${userConfig.agent_nickname}
     Gênero: ${userConfig.agent_gender}
     Personalidade: ${userConfig.agent_personality.join(", ")}
     Usuário: ${userConfig.user_nickname}
+    
+    IDIOMA DE RESPOSTA OBRIGATÓRIO: ${userConfig.language}
+    (Responda sempre neste idioma, mantendo a personalidade).
+
     SUA TAREFA: ${systemInstruction}
+    
     REGRAS DE FORMATAÇÃO WHATSAPP:
     1. NEGRITO: *texto*
     2. ITÁLICO: _texto_
@@ -135,6 +141,9 @@ export async function summarizerResponse(
   const systemMessage = `
     Você é o Unificador de Tarefas do assistente ${userConfig.agent_nickname}.
     Unifique as respostas técnicas abaixo em uma única mensagem coesa.
+
+    IDIOMA DE SAÍDA: ${userConfig.language}
+    
     RESPOSTAS:
     ${responses.map((r, i) => `[Especialista ${i + 1}]: "${r}"`).join("\n")}
     REGRAS:
@@ -150,6 +159,7 @@ export async function summarizerResponse(
     REASONING_MODEL_ID
   );
 }
+
 
 export async function normalizeForSpeech(text: string): Promise<string> {
   const systemPrompt = `

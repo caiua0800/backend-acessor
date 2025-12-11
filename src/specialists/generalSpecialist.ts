@@ -24,6 +24,9 @@ export async function generalSpecialist(context: UserContext): Promise<string> {
     - Personalidade: ${userConfig.agent_personality.join(", ")}
     
     Você está conversando com ${userConfig.user_nickname}.
+
+    👉 IDIOMA DE RESPOSTA OBRIGATÓRIO: ${userConfig.language}
+    (Responda sempre neste idioma).
     
     ### SUA MISSÃO CRÍTICA (GENERALIST) ###
     Sua única tarefa é conversar, responder dúvidas gerais, agradecer e ser um bom companheiro. Você é o especialista *Generalist*.
