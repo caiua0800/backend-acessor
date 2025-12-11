@@ -1,13 +1,15 @@
 import { Request, Response } from "express";
-import axios from "axios";
+import fs from "fs";
 import { transcribeAudio } from "../services/openaiService";
-import { downloadWhatsAppMedia } from "../services/whatsappService";
+import {
+  downloadWhatsAppMedia,
+  sendTextMessage,
+} from "../services/whatsappService";
 import { cleanupFiles } from "../services/mediaService";
 import { pool } from "../db";
 import * as orchestrationService from "../services/orchestrationService";
-import * as whatsappService from "../services/whatsappService";
+import * as aiService from "../services/aiService";
 
-// --- FUNÇÃO DE NORMALIZAÇÃO DE TELEFONE ---
 const normalizePhoneNumber = (phone: string): string => {
   let cleanPhone = phone.replace(/\D/g, "");
   if (cleanPhone.startsWith("55") && cleanPhone.length === 12) {
@@ -19,7 +21,6 @@ const normalizePhoneNumber = (phone: string): string => {
   return cleanPhone;
 };
 
-// --- INTERFACES PARA O BUFFER ---
 interface BufferedMessage {
   content: string;
   timestamp: number;
@@ -33,7 +34,6 @@ interface UserBuffer {
 
 const messageBuffers: Record<string, UserBuffer> = {};
 
-// --- ORQUESTRADOR LOCAL ---
 const processAndRespond = async (waId: string) => {
   const buffer = messageBuffers[waId];
   if (!buffer || buffer.messages.length === 0) return;
@@ -42,14 +42,11 @@ const processAndRespond = async (waId: string) => {
   const fullMessage = buffer.messages.map((m) => m.content).join(". ");
   const userName = buffer.userName;
 
-  console.log(`🧠 Processando mensagem final (${waId}): "${fullMessage}"`);
   delete messageBuffers[waId];
 
   try {
-    // Busca dados do usuário e configurações
     const userRes = await pool.query(
-      `SELECT u.id, u.full_name, uc.* 
-         FROM users u
+      `SELECT u.id, u.full_name, uc.* FROM users u
          LEFT JOIN user_configs uc ON u.id = uc.user_id
          WHERE u.phone_number = $1`,
       [waId]
@@ -57,37 +54,33 @@ const processAndRespond = async (waId: string) => {
 
     const dbConfig = userRes.rows.length > 0 ? userRes.rows[0] : {};
 
-    // Mapeia usando as colunas corretas do seu banco
     const userConfig = {
       agent_nickname: dbConfig.agent_nickname || "Acessor",
       agent_gender: dbConfig.agent_gender || "Masculino",
       agent_personality: dbConfig.agent_personality || ["Amigo", "Eficiente"],
       user_nickname: userName,
       full_name: userName,
-
-      // --- CORREÇÃO AQUI ---
-      ai_send_audio: dbConfig.ai_send_audio, // Nome correto da coluna
-      agent_voice_id: dbConfig.agent_voice_id, // Nome correto da coluna
+      ai_send_audio: dbConfig.ai_send_audio,
+      agent_voice_id: dbConfig.agent_voice_id,
     };
 
     const context = { waId, fullMessage, userName, userConfig };
 
-    // Processa a resposta
+    console.log(`Mensagem do usuário: ${fullMessage}`);
+
     const finalResponse = await orchestrationService.processAndOrchestrate(
       context
     );
 
-    // Envia a resposta (Passando o userConfig para decidir entre áudio/texto)
-    await whatsappService.sendTextMessage(waId, finalResponse, {
+    console.log(`Mensagem do agente: ${finalResponse}`);
+
+    await sendTextMessage(waId, finalResponse, {
       userConfig: userConfig,
       userOriginalMessage: fullMessage,
     });
-
-    console.log(`✅ Resposta final enviada para ${waId}.`);
   } catch (error: any) {
-    console.error("❌ Erro no processamento:", error.message);
     try {
-      await whatsappService.sendTextMessage(
+      await sendTextMessage(
         waId,
         "*Desculpe*, houve um erro grave na nossa central. Tente novamente mais tarde."
       );
@@ -95,7 +88,6 @@ const processAndRespond = async (waId: string) => {
   }
 };
 
-// ... (Resto do arquivo verifyWebhook e processWebhook continua igual)
 export const verifyWebhook = (req: Request, res: Response) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -103,7 +95,6 @@ export const verifyWebhook = (req: Request, res: Response) => {
 
   if (mode && token) {
     if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-      console.log("WEBHOOK_VERIFIED");
       res.status(200).send(challenge);
     } else {
       res.sendStatus(403);
@@ -130,7 +121,6 @@ export const processWebhook = async (req: Request, res: Response) => {
       const originalWaId = contact.wa_id;
       const waId = normalizePhoneNumber(originalWaId);
 
-      // Atualiza Janela de 24h
       await pool.query(
         "UPDATE users SET last_interaction_at = NOW() WHERE phone_number = $1",
         [waId]
@@ -146,11 +136,42 @@ export const processWebhook = async (req: Request, res: Response) => {
       if (type === "text") {
         textContent = message.text.body;
       } else if (type === "audio") {
-        console.log("🎤 Áudio recebido. Transcrevendo...");
-        const audioPath = await downloadWhatsAppMedia(message.audio.url);
+        const audioPath = await downloadWhatsAppMedia(
+          message.audio.id || message.audio.url
+        );
         filesToCleanup.push(audioPath);
         textContent = await transcribeAudio(audioPath);
-        console.log(`📝 Transcrição: ${textContent}`);
+      } else if (type === "document") {
+        const mime = message.document.mime_type;
+        const fileName = message.document.filename;
+
+        if (
+          mime.includes("csv") ||
+          mime.includes("text") ||
+          fileName.endsWith(".csv")
+        ) {
+          const docPath = await downloadWhatsAppMedia(
+            message.document.id || message.document.url
+          );
+          filesToCleanup.push(docPath);
+          const fileContent = fs.readFileSync(docPath, "utf-8");
+          textContent = `[ARQUIVO IMPORTADO: ${fileName}]\n${fileContent}`;
+        } else {
+          textContent = `Enviei um arquivo: ${fileName} (Ainda não sei ler este formato)`;
+        }
+      } else if (type === "image") {
+        const imagePath = await downloadWhatsAppMedia(
+          message.image.id || message.image.url
+        );
+        filesToCleanup.push(imagePath);
+        const caption = message.image.caption || "";
+
+        const imageDescription = await aiService.describeImage(
+          imagePath,
+          "Descreva esta imagem detalhadamente para fins financeiros ou organizacionais. Se for uma tabela ou recibo, extraia os dados."
+        );
+
+        textContent = `[IMAGEM ENVIADA: ${caption}]\nCONTEÚDO DA IMAGEM: ${imageDescription}`;
       }
 
       if (!textContent) {
@@ -175,10 +196,9 @@ export const processWebhook = async (req: Request, res: Response) => {
         cleanupFiles(filesToCleanup);
       }
 
-      console.log(`⏳ Mensagem adicionada. Timer resetado (1s).`);
       messageBuffers[waId].timer = setTimeout(() => {
         processAndRespond(waId);
-      }, 1000);
+      }, 2000);
     }
   } catch (error: any) {
     console.error("Erro no processamento do Webhook:", error.message);

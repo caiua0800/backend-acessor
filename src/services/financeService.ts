@@ -341,10 +341,13 @@ export const listInvestmentsByUserId = async (userId: string) => {
   };
 };
 
-export const addRecurringTransactionByUserId = async (userId: string, data: any) => {
+export const addRecurringTransactionByUserId = async (
+  userId: string,
+  data: any
+) => {
   const amountVal = Math.abs(parseMoney(data.amount));
   const type = data.type ? data.type.toLowerCase().trim() : "expense";
-  
+
   // Se o dia não for informado, usa o dia atual
   let day = data.day_of_month ? parseInt(data.day_of_month) : moment().date();
   if (day < 1) day = 1;
@@ -361,7 +364,7 @@ export const addRecurringTransactionByUserId = async (userId: string, data: any)
       type,
       data.category || (type === "income" ? "Entrada Fixa" : "Gasto Fixo"),
       data.description || "Recorrência",
-      day
+      day,
     ]
   );
 
@@ -376,7 +379,9 @@ export const processDailyRecurringTransactions = async () => {
   const currentDay = today.date();
   const currentMonthStr = today.format("YYYY-MM"); // Ex: 2023-12
 
-  console.log(`🔄 [CRON FINANCEIRO] Buscando contas fixas para o dia ${currentDay}...`);
+  console.log(
+    `🔄 [CRON FINANCEIRO] Buscando contas fixas para o dia ${currentDay}...`
+  );
 
   try {
     // Busca tudo que vence hoje, está ativo, E AINDA NÃO FOI PROCESSADO ESTE MÊS
@@ -389,7 +394,9 @@ export const processDailyRecurringTransactions = async () => {
     );
 
     if (res.rows.length === 0) {
-      console.log("✅ [CRON FINANCEIRO] Nenhuma conta fixa para processar hoje.");
+      console.log(
+        "✅ [CRON FINANCEIRO] Nenhuma conta fixa para processar hoje."
+      );
       return;
     }
 
@@ -401,18 +408,20 @@ export const processDailyRecurringTransactions = async () => {
 
         // --- LÓGICA DE SALDO (Cópia simplificada do addTransaction) ---
         const settingsRes = await client.query(
-            `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
-            [item.user_id]
+          `SELECT current_account_amount FROM finance_settings WHERE user_id = $1 FOR UPDATE`,
+          [item.user_id]
         );
-        
+
         let currentBalance = 0;
         if (settingsRes.rows.length > 0) {
-            currentBalance = parseFloat(settingsRes.rows[0].current_account_amount || 0);
+          currentBalance = parseFloat(
+            settingsRes.rows[0].current_account_amount || 0
+          );
         } else {
-            await client.query(
-                `INSERT INTO finance_settings (user_id, current_account_amount) VALUES ($1, 0)`,
-                [item.user_id]
-            );
+          await client.query(
+            `INSERT INTO finance_settings (user_id, current_account_amount) VALUES ($1, 0)`,
+            [item.user_id]
+          );
         }
 
         const amountVal = parseFloat(item.amount);
@@ -434,25 +443,26 @@ export const processDailyRecurringTransactions = async () => {
             item.category,
             `${item.description} (Automático)`, // Identificador
             beforeAmount,
-            afterAmount
+            afterAmount,
           ]
         );
 
         // 2. Atualiza saldo do usuário
         await client.query(
-            `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
-            [afterAmount, item.user_id]
+          `UPDATE finance_settings SET current_account_amount = $1 WHERE user_id = $2`,
+          [afterAmount, item.user_id]
         );
 
         // 3. Marca a recorrência como processada (para não rodar dnv hoje/este mês)
         await client.query(
-            `UPDATE recurring_transactions SET last_processed_at = NOW() WHERE id = $1`,
-            [item.id]
+          `UPDATE recurring_transactions SET last_processed_at = NOW() WHERE id = $1`,
+          [item.id]
         );
 
         await client.query("COMMIT");
-        console.log(`✅ Item ${item.id} (${item.description}) processado para User ${item.user_id}`);
-
+        console.log(
+          `✅ Item ${item.id} (${item.description}) processado para User ${item.user_id}`
+        );
       } catch (err) {
         await client.query("ROLLBACK");
         console.error(`❌ Erro ao processar item recorrente ${item.id}:`, err);
@@ -465,9 +475,43 @@ export const processDailyRecurringTransactions = async () => {
   }
 };
 
-export const addRecurringTransaction = async (whatsappId: string, data: any) => {
+export const addRecurringTransaction = async (
+  whatsappId: string,
+  data: any
+) => {
   const userId = await getUserId(whatsappId);
   return addRecurringTransactionByUserId(userId, data);
+};
+
+export const getRecurringExpensesTotal = async (whatsappId: string) => {
+  const userId = await getUserId(whatsappId);
+
+  const res = await pool.query(
+    `SELECT SUM(amount) as total 
+     FROM recurring_transactions 
+     WHERE user_id = $1 AND active = TRUE AND type = 'expense'`,
+    [userId]
+  );
+
+  const total = parseFloat(res.rows[0].total || 0);
+
+  // Opcional: Pegar lista detalhada
+  const listRes = await pool.query(
+    `SELECT description, amount, day_of_month 
+     FROM recurring_transactions 
+     WHERE user_id = $1 AND active = TRUE AND type = 'expense'
+     ORDER BY day_of_month ASC`,
+    [userId]
+  );
+
+  return {
+    total: total,
+    items: listRes.rows.map((r) => ({
+      description: r.description,
+      amount: parseFloat(r.amount),
+      day: r.day_of_month,
+    })),
+  };
 };
 
 export const searchTransactionsByUserId = async (
@@ -480,53 +524,55 @@ export const searchTransactionsByUserId = async (
   // Queries base
   let countQuery = `SELECT COUNT(*) FROM transactions WHERE user_id = $1`;
   let dataQuery = `SELECT id, amount, type, category, description, transaction_date FROM transactions WHERE user_id = $1`;
-  
+
   const baseParams = [userId];
   let filterIndex = 2; // O primeiro parâmetro ($1) é sempre o userId
-  
+
   // 1. Constrói a cláusula WHERE para filtros
   const whereClauses = [];
-  
+
   if (categoryFilter) {
     whereClauses.push(`category = $${filterIndex++}`);
     baseParams.push(categoryFilter);
   }
-  
+
   if (descriptionFilter) {
     // unaccent(): Remove acentos (requer a extensão unaccent no seu DB)
     // LOWER() e ILIKE: Garantem que a comparação seja case-insensitive.
-    whereClauses.push(`unaccent(LOWER(description)) ILIKE unaccent(LOWER($${filterIndex++}))`);
+    whereClauses.push(
+      `unaccent(LOWER(description)) ILIKE unaccent(LOWER($${filterIndex++}))`
+    );
     baseParams.push(`%${descriptionFilter}%`);
   }
 
   if (whereClauses.length > 0) {
-    const whereCondition = whereClauses.join(' AND ');
+    const whereCondition = whereClauses.join(" AND ");
     countQuery += ` AND ${whereCondition}`;
     dataQuery += ` AND ${whereCondition}`;
   }
-  
+
   // 2. Query para o total count (usa os mesmos parâmetros de filtro)
   const totalCountRes = await pool.query(countQuery, baseParams);
   const totalCount = parseInt(totalCountRes.rows[0].count, 10);
-  
+
   // 3. Query para todas as categorias (para o filtro do frontend)
   const categoryRes = await pool.query(
     "SELECT DISTINCT category FROM transactions WHERE user_id = $1 AND category IS NOT NULL ORDER BY category ASC",
     [userId]
   );
-  const categories = categoryRes.rows.map(row => row.category);
+  const categories = categoryRes.rows.map((row) => row.category);
 
   // 4. Query para os dados paginados
   const dataParams = [...baseParams];
   // Adiciona ORDER BY, LIMIT e OFFSET no final
   dataQuery += ` ORDER BY transaction_date DESC LIMIT $${filterIndex++} OFFSET $${filterIndex++}`;
-  
+
   dataParams.push(limit.toString());
   dataParams.push(offset.toString());
-  
+
   const dataRes = await pool.query(dataQuery, dataParams);
-  
-  const transactions = dataRes.rows.map(row => ({
+
+  const transactions = dataRes.rows.map((row) => ({
     id: row.id,
     amount: parseFloat(row.amount),
     type: row.type,
@@ -534,12 +580,12 @@ export const searchTransactionsByUserId = async (
     description: row.description,
     date: row.transaction_date,
   }));
-  
+
   return {
     transactions,
     total: totalCount,
     categories,
     page: offset / limit + 1,
-    limit: limit
+    limit: limit,
   };
 };

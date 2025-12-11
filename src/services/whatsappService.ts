@@ -13,6 +13,19 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const DEFAULT_VOICE_ID = process.env.DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
+// Helper para descobrir a extensão baseada no Mime Type
+const getExtension = (mimeType: string): string => {
+  if (mimeType.includes("csv")) return "csv";
+  if (mimeType.includes("pdf")) return "pdf";
+  if (mimeType.includes("image/jpeg")) return "jpg";
+  if (mimeType.includes("image/png")) return "png";
+  if (mimeType.includes("audio/ogg")) return "ogg";
+  if (mimeType.includes("audio/mpeg") || mimeType.includes("audio/mp3"))
+    return "mp3";
+  if (mimeType.includes("text/plain")) return "txt";
+  return "bin"; // Fallback
+};
+
 const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
   const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/media`;
   const form = new FormData();
@@ -42,8 +55,10 @@ const sendAudioMessage = async (recipientWaId: string, filePath: string) => {
     );
   } finally {
     try {
-        if (fs.existsSync(filePath)) await fs.promises.unlink(filePath);
-    } catch (e) { console.error("Erro ao deletar arquivo temp:", e); }
+      if (fs.existsSync(filePath)) await fs.promises.unlink(filePath);
+    } catch (e) {
+      console.error("Erro ao deletar arquivo temp:", e);
+    }
   }
 };
 
@@ -59,11 +74,9 @@ export const sendTextMessage = async (
 
   try {
     let shouldSendAudio = false;
-    // Verifica se tem link na mensagem original
     const hasLink =
       messageText.includes("http://") || messageText.includes("https://");
 
-    // --- LÓGICA DE DECISÃO DE ÁUDIO ---
     if (options?.userConfig?.ai_send_audio) {
       const wordCount = messageText.split(/\s+/).length;
       const userMsg = options.userOriginalMessage?.toLowerCase() || "";
@@ -74,7 +87,6 @@ export const sendTextMessage = async (
 
       const isListResponse = (messageText.match(/•|- /g) || []).length > 2;
 
-      // Manda áudio se for curto e usuário não pediu texto
       if (wordCount <= 70 && !askedForText && !isListResponse) {
         shouldSendAudio = true;
       }
@@ -83,7 +95,6 @@ export const sendTextMessage = async (
     if (shouldSendAudio) {
       console.log(`🎙️ Decisão: Enviar ÁUDIO para ${recipientWaId}`);
 
-      // 1. Gera e envia o áudio (que agora vai ocultar o link graças ao aiService)
       const speechText = await aiService.normalizeForSpeech(messageText);
       const voiceId = options?.userConfig?.agent_voice_id || DEFAULT_VOICE_ID;
       const audioPath = await elevenLabsService.generateAudio(
@@ -92,14 +103,13 @@ export const sendTextMessage = async (
       );
       await sendAudioMessage(recipientWaId, audioPath);
 
-      // 2. SE TIVER LINK, MANDA O TEXTO TAMBÉM (Híbrido)
       if (hasLink) {
         console.log(`🔗 Link detectado. Enviando complemento de TEXTO.`);
         const payload = {
           messaging_product: "whatsapp",
           to: recipientWaId,
           type: "text",
-          text: { preview_url: true, body: messageText }, // preview_url true fica bonito
+          text: { preview_url: true, body: messageText },
         };
         await axios.post(
           `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
@@ -113,7 +123,6 @@ export const sendTextMessage = async (
         );
       }
     } else {
-      // Envio Apenas Texto (Padrão)
       const payload = {
         messaging_product: "whatsapp",
         to: recipientWaId,
@@ -148,41 +157,50 @@ export const sendTextMessage = async (
   }
 };
 
-const convertAudioToOggOpus = (inputPath: string): Promise<string> => {
-  const outputPath = path.join("uploads", `${uuidv4()}.ogg`);
-
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .toFormat("ogg") // Formato Ogg
-      .audioCodec("libopus") // Codec Opus (CRÍTICO para WhatsApp)
-      .on("error", (err) => {
-        console.error("❌ FFmpeg Erro na Transcodificação:", err.message);
-        reject(new Error("FFmpeg falhou ao converter áudio."));
-      })
-      .on("end", () => {
-        // Limpa o arquivo MP3 original
-        fs.unlinkSync(inputPath);
-        resolve(outputPath);
-      })
-      .save(outputPath);
-  });
-};
-
+// --- FUNÇÃO CORRIGIDA DE DOWNLOAD ---
 export const downloadWhatsAppMedia = async (
   mediaIdOrUrl: string
 ): Promise<string> => {
   try {
     if (!WHATSAPP_TOKEN) throw new Error("WHATSAPP_TOKEN não definido.");
-    const response = await axios.get(mediaIdOrUrl, {
+
+    // Se não for URL completa, assumimos que é um ID e buscamos a URL na Graph API
+    let mediaUrl = mediaIdOrUrl;
+    let mimeType = "";
+
+    if (!mediaIdOrUrl.startsWith("http")) {
+      try {
+        const metadataRes = await axios.get(
+          `${WHATSAPP_API_URL}/${mediaIdOrUrl}`,
+          {
+            headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+          }
+        );
+        mediaUrl = metadataRes.data.url;
+        mimeType = metadataRes.data.mime_type;
+      } catch (err) {
+        throw new Error("Falha ao recuperar URL da mídia pelo ID.");
+      }
+    }
+
+    // Faz o download do binário
+    const response = await axios.get(mediaUrl, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
       responseType: "arraybuffer",
     });
-    const fileName = `${uuidv4()}.ogg`;
+
+    // Define extensão correta (evita salvar CSV como .ogg)
+    const ext = getExtension(mimeType || "bin");
+    const fileName = `${uuidv4()}.${ext}`;
     const filePath = path.join("uploads", fileName);
+
     if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
     fs.writeFileSync(filePath, response.data);
+
     return filePath;
   } catch (error: any) {
+    console.error("Erro no download de mídia:", error.message);
     throw new Error("Falha no download da mídia");
   }
 };
+
