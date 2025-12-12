@@ -172,6 +172,8 @@ export const getAgentConfig = async (userId: string) => {
   return res.rows[0];
 };
 
+// export const printUserConfig
+
 // 3. ATUALIZAR CONFIGURAÇÕES DO USUÁRIO (NOVO)
 export const updateUserConfigs = async (
   userId: string,

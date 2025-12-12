@@ -89,7 +89,12 @@ export const sendTextMessage = async (
 
       var randomNum = Math.random();
 
-      if (wordCount <= 70 && !askedForText && !isListResponse && randomNum > 0.50) {
+      if (
+        wordCount <= 70 &&
+        !askedForText &&
+        !isListResponse &&
+        randomNum > 0
+      ) {
         shouldSendAudio = true;
       }
     }
@@ -97,7 +102,12 @@ export const sendTextMessage = async (
     if (shouldSendAudio) {
       console.log(`🎙️ Decisão: Enviar ÁUDIO para ${recipientWaId}`);
 
-      const speechText = await aiService.normalizeForSpeech(messageText);
+      const userLang = options?.userConfig?.language || "Português (Brasil)";
+
+      const speechText = await aiService.normalizeForSpeech(
+        messageText,
+        userLang
+      );
       const voiceId = options?.userConfig?.agent_voice_id || DEFAULT_VOICE_ID;
       const audioPath = await elevenLabsService.generateAudio(
         speechText,
@@ -205,4 +215,3 @@ export const downloadWhatsAppMedia = async (
     throw new Error("Falha no download da mídia");
   }
 };
-

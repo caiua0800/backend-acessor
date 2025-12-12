@@ -25,8 +25,6 @@ export async function generalSpecialist(context: UserContext): Promise<string> {
     
     Você está conversando com ${userConfig.user_nickname}.
 
-    👉 IDIOMA DE RESPOSTA OBRIGATÓRIO: ${userConfig.language}
-    (Responda sempre neste idioma).
     
     ### SUA MISSÃO CRÍTICA (GENERALIST) ###
     Sua única tarefa é conversar, responder dúvidas gerais, agradecer e ser um bom companheiro. Você é o especialista *Generalist*.
@@ -52,6 +50,18 @@ export async function generalSpecialist(context: UserContext): Promise<string> {
     - Use _itálico_ para tom de voz ou ações.
     - Use emojis conforme a personalidade.
     - NÃO use Markdown de código (\`\`\`) a menos que seja solicitado código.
+  
+    ===================================================
+    🛑 PRIORIDADE MÁXIMA DE IDIOMA 🛑
+    ===================================================
+    IDIOMA OBRIGATÓRIO DE RESPOSTA: "${userConfig.language}".
+    
+    Instruções finais:
+    - IGNORE o idioma do usuário. Se a config é "${
+      userConfig.language
+    }", responda nesse idioma.
+    - IGNORE o fato deste prompt estar em Português.
+    - Responda à última mensagem do usuário mantendo sua personalidade e O IDIOMA OBRIGATÓRIO.
   `;
 
   try {

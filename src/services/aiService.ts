@@ -98,7 +98,9 @@ export async function extractData(
   userMessage: string,
   userTimezone: string = "America/Sao_Paulo" // <--- Novo parâmetro
 ): Promise<string> {
-  const finalPrompt = `[DATA/HORA ATUAL DO USUÁRIO: ${getCurrentTime(userTimezone)} (Fuso: ${userTimezone})]\n${systemPrompt}`;
+  const finalPrompt = `[DATA/HORA ATUAL DO USUÁRIO: ${getCurrentTime(
+    userTimezone
+  )} (Fuso: ${userTimezone})]\n${systemPrompt}`;
   return await grokCompletion(finalPrompt, userMessage, FAST_MODEL_ID, true);
 }
 
@@ -107,26 +109,33 @@ export async function generatePersonaResponse(
   userMessage: string,
   userConfig: any
 ): Promise<string> {
-  
-  const systemPrompt = `
-    IDENTIDADE DO AGENTE:
-    Nome: ${userConfig.agent_nickname}
-    Gênero: ${userConfig.agent_gender}
-    Personalidade: ${userConfig.agent_personality.join(", ")}
-    Usuário: ${userConfig.user_nickname}
-    
-    IDIOMA DE RESPOSTA OBRIGATÓRIO: ${userConfig.language}
-    (Responda sempre neste idioma, mantendo a personalidade).
+  // Debug: Verifique no terminal se o idioma está chegando corretamente
+  console.log(
+    `🗣️ [AI LANGUAGE] Configuração recebida: "${userConfig.language}"`
+  );
 
-    SUA TAREFA: ${systemInstruction}
+  const systemPrompt = `
+    INSTRUÇÕES DE PERSONA:
+    - Nome: ${userConfig.agent_nickname}
+    - Gênero: ${userConfig.agent_gender}
+    - Personalidade: ${userConfig.agent_personality.join(", ")}
+    - Usuário: ${userConfig.user_nickname}
     
-    REGRAS DE FORMATAÇÃO WHATSAPP:
-    1. NEGRITO: *texto*
-    2. ITÁLICO: _texto_
-    3. TACHADO: ~texto~
-    4. MONOSPACE: \`\`\`texto\`\`\`
-    5. LINKS: Funcionando.
-    6. Seja conciso e mantenha a personalidade.
+    TAREFA TÉCNICA: ${systemInstruction}
+    
+    REGRAS DE FORMATAÇÃO:
+    1. Use formatação do WhatsApp (*negrito*, _itálico_).
+    2. Seja conciso e natural.
+
+    ===================================================
+    🛑 REGRAS CRÍTICAS DE IDIOMA (PRIORIDADE MÁXIMA) 🛑
+    ===================================================
+    1. O idioma OBRIGATÓRIO para a resposta é: "${userConfig.language}".
+    2. IGNORE o idioma em que o usuário escreveu. Se ele escrever em Português mas a configuração for English, RESPONDA EM ENGLISH.
+    3. IGNORE o fato de que estas instruções estão em Português. Sua saída final deve obedecer SOMENTE à variável de idioma acima.
+    4. Traduza qualquer termo técnico ou resposta do sistema para "${
+      userConfig.language
+    }" antes de enviar.
   `;
 
   return await grokCompletion(systemPrompt, userMessage, REASONING_MODEL_ID);
@@ -139,20 +148,23 @@ export async function summarizerResponse(
   if (responses.length === 1) return responses[0];
 
   const systemMessage = `
-    Você é o Unificador de Tarefas do assistente ${userConfig.agent_nickname}.
-    Unifique as respostas técnicas abaixo em uma única mensagem coesa.
-
-    IDIOMA DE SAÍDA: ${userConfig.language}
-    
-    RESPOSTAS:
-    ${responses.map((r, i) => `[Especialista ${i + 1}]: "${r}"`).join("\n")}
-    REGRAS:
-    1. Fusão Inteligente.
-    2. Prioridade de Ação.
-    3. Formatação WhatsApp.
-    4. Mantenha a personalidade: ${userConfig.agent_personality.join(", ")}.
-  `;
-
+  Você é o Unificador de Tarefas do assistente ${userConfig.agent_nickname}.
+  Unifique as respostas técnicas abaixo em uma única mensagem coesa.
+  
+  RESPOSTAS ORIGINAIS:
+  ${responses.map((r, i) => `[Especialista ${i + 1}]: "${r}"`).join("\n")}
+  
+  REGRAS:
+  1. Fusão Inteligente.
+  2. Prioridade de Ação.
+  3. Formatação WhatsApp.
+  
+  ===================================================
+  🛑 PRIORIDADE MÁXIMA DE IDIOMA 🛑
+  ===================================================
+  VOCÊ DEVE ESCREVER A RESPOSTA FINAL EM: "${userConfig.language}".
+  Não misture idiomas. Traduza o conteúdo dos especialistas se necessário.
+`;
   return await grokCompletion(
     systemMessage,
     "Unifique as respostas acima.",
@@ -160,19 +172,25 @@ export async function summarizerResponse(
   );
 }
 
-
-export async function normalizeForSpeech(text: string): Promise<string> {
+export async function normalizeForSpeech(
+  text: string, 
+  language: string = "Português (Brasil)" // <--- Novo parâmetro com valor padrão
+): Promise<string> {
   const systemPrompt = `
-    Você é um redator de scripts para locução.
-    Reescreva o texto para soar natural lido por um robô.
-    REGRAS:
-    1. REMOVA URLS, substitua por "o link está aqui embaixo".
-    2. Números e Moedas por extenso.
-    3. Remova emojis.
-    4. Remova formatação (*, _).
-    5. Texto fluido.
+    Você é um redator de scripts para locução (TTS).
+    
+    IDIOMA DO SCRIPT: ${language}
+    
+    SUA TAREFA:
+    1. Prepare o texto para ser lido por um robô neste idioma.
+    2. IMPORTANTE: MANTENHA O IDIOMA do texto original. Se o texto veio em Inglês, a saída DEVE ser em Inglês.
+    3. Remova URLs (substitua por "o link enviado").
+    4. Escreva números e moedas por extenso (no idioma ${language}).
+    5. Remova emojis e formatação (*, _).
+    6. Se o texto estiver misturado, dê preferência ao idioma: ${language}.
   `;
 
+  // Usa o modelo rápido para não demorar
   return await grokCompletion(systemPrompt, text, FAST_MODEL_ID);
 }
 
