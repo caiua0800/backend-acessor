@@ -63,7 +63,7 @@ export async function identifyTasks(
 ): Promise<string[]> {
   const systemMessage = `
         Você é um Planejador de Tarefas. Sua função é decidir quais especialistas ativar para a última mensagem do usuário.
-        KEYWORDS DISPONÍVEIS: 'calendar', 'email', 'finance', 'market', 'goals', 'ideas', 'files', 'vault', 'gym', 'todo', 'study', 'general'.
+        KEYWORDS DISPONÍVEIS: 'calendar', 'finance', 'market', 'goals', 'ideas', 'files', 'vault', 'gym', 'todo', 'study', 'general'.
         Se identificar uma intenção técnica clara, NÃO inclua 'general'.
         'general' serve apenas para papo furado.
         FINANÇAS: Gastos, pagamentos, salário, saldo, planilhas financeiras, exportar relatório financeiro.

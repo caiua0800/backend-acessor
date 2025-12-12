@@ -27,7 +27,6 @@ const specialistMap: Record<string, (context: UserContext) => Promise<string>> =
   calendar: calendarSpecialist as (context: UserContext) => Promise<string>,
   goals: goalsSpecialist as (context: UserContext) => Promise<string>,
   finance: financeSpecialist as (context: UserContext) => Promise<string>,
-  email: gmailSpecialist as (context: UserContext) => Promise<string>,
   files: fileManagerSpecialist as (context: UserContext) => Promise<string>,
   vault: vaultSpecialist as (context: UserContext) => Promise<string>,
   gym: gymSpecialist as (context: UserContext) => Promise<string>,
