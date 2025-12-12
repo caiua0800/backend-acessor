@@ -509,10 +509,28 @@ export async function calendarSpecialist(
     );
   } catch (error: any) {
     console.error("❌ [CALENDAR ERROR]", error);
-    if (error.message.includes("AUTH_REQUIRED")) {
+
+    const errorMessage = error.message || "";
+
+    // Verifica se é erro de falta de conta vinculada OU erro de permissões insuficientes (scopes)
+    const isAuthError =
+      errorMessage.includes("AUTH_REQUIRED") ||
+      errorMessage.includes("insufficient authentication scopes") ||
+      errorMessage.includes("invalid_grant");
+
+    if (isAuthError) {
       const url = googleService.getAuthUrl(waId);
-      return `Preciso de permissão. Clique aqui: ${url}`;
-    }
+
+      // Retornamos uma mensagem direta que solicita a permissão, incluindo o link.
+      // Isso ignora a tentativa da IA de explicar o erro técnico.
+      return `⚠️ *Atenção:* Notei que sua integração com o Google precisa de uma renovação de permissões para eu conseguir agendar seus eventos.
+
+        Clique no link abaixo para autorizar o acesso completo (Agenda, Docs e Planilhas):
+        ${url}
+
+        Após autorizar, você pode me pedir para agendar o compromisso novamente! 🚀`;
+            }
+
     return `Erro na agenda: ${error.message}`;
   }
 }
