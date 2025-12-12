@@ -31,6 +31,7 @@ import studyRoutes from "./routes/studyRoutes";
 import { setupMemoryTable } from "./services/memoryService";
 import { processNotificationQueue } from "./services/notificationService";
 import { processDailyRecurringTransactions } from "./services/financeService";
+import riscRoutes from "./routes/riscRoutes";
 
 const app = express();
 
@@ -128,7 +129,7 @@ app.use("/gym", gymRoutes);
 app.use("/todo", todoRoutes);
 app.use("/vault", vaultRoutes);
 app.use("/study", studyRoutes); 
-
+app.use("/auth/risc", riscRoutes);
 // ... (Restante do código de initializeServices e Lógica Principal é o mesmo)
 async function initializeServices() {
   try {

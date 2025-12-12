@@ -3,6 +3,8 @@ import { pool } from "../db";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import moment from "moment-timezone";
+// CORREÇÃO 1: Importações necessárias
+import { encryptData, decryptData } from "../utils/cryptoUtils";
 
 const TIME_ZONE = "America/Sao_Paulo";
 
@@ -10,28 +12,19 @@ const TIME_ZONE = "America/Sao_Paulo";
 // 🔐 AUTENTICAÇÃO E OAUTH2
 // ============================================================================
 const DEFAULT_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
-// URL Específica para o Cadastro (troca de CODE por TOKEN)
-const REGISTRATION_REDIRECT_URI = process.env.GOOGLE_REG_REDIRECT_URI; 
-
-// const createOAuthClient = () => {
-//   return new google.auth.OAuth2(
-//     process.env.GOOGLE_CLIENT_ID,
-//     process.env.GOOGLE_CLIENT_SECRET,
-//     process.env.GOOGLE_REDIRECT_URI
-//   );
-// };
+const REGISTRATION_REDIRECT_URI = process.env.GOOGLE_REG_REDIRECT_URI;
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
 const createOAuthClient = (redirectUri?: string) => {
   return new google.auth.OAuth2(
     CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    redirectUri || DEFAULT_REDIRECT_URI 
+    redirectUri || DEFAULT_REDIRECT_URI
   );
 };
 
 export const getGoogleAuthUrlRegistration = (state: string) => {
-  const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI); // <--- USA A URL DE CADASTRO
+  const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI);
   return oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
@@ -45,36 +38,23 @@ export const getGoogleAuthUrlRegistration = (state: string) => {
   });
 };
 
-/**
- * Valida o ID Token do Google e retorna o e-mail do usuário.
- * @param idToken O token JWT emitido pelo Google após o login.
- * @returns O e-mail verificado do usuário.
- */
 export const verifyGoogleIdToken = async (idToken: string): Promise<string> => {
-  // Usamos a biblioteca google-auth-library para verificar o token
-  // Nota: A função getAuthenticatedClient usa a mesma biblioteca, mas em outro contexto
   const client = new google.auth.OAuth2(CLIENT_ID);
-  
   try {
-      const ticket = await client.verifyIdToken({
-          idToken: idToken,
-          audience: CLIENT_ID, // Deve bater com o seu Client ID
-      });
-      
-      const payload = ticket.getPayload();
-      
-      if (!payload || !payload.email || !payload.email_verified) {
-          throw new Error("Token do Google inválido ou e-mail não verificado.");
-      }
-      
-      return payload.email.toLowerCase(); // Retorna o e-mail normalizado
-
+    const ticket = await client.verifyIdToken({
+      idToken: idToken,
+      audience: CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email || !payload.email_verified) {
+      throw new Error("Token do Google inválido ou e-mail não verificado.");
+    }
+    return payload.email.toLowerCase();
   } catch (e: any) {
-      console.error("❌ Erro ao verificar Google ID Token:", e.message);
-      throw new Error("Falha na autenticação com o Google.");
+    console.error("❌ Erro ao verificar Google ID Token:", e.message);
+    throw new Error("Falha na autenticação com o Google.");
   }
 };
-
 
 // --- HELPER CRÍTICO: Retorna Cliente, ID do Usuário e TOKEN DE SYNC ---
 const getAuthenticatedClient = async (whatsappId: string) => {
@@ -90,11 +70,33 @@ const getAuthenticatedClient = async (whatsappId: string) => {
     throw new Error("AUTH_REQUIRED");
   }
 
+  // --- LÓGICA DE DESCRIPTOGRAFIA SEGURA ---
+  let refreshToken = res.rows[0].google_refresh_token;
+
+  try {
+    // Verifica se parece estar criptografado (tem o formato iv:content)
+    if (refreshToken.includes(":")) {
+      const decrypted = decryptData(refreshToken);
+      // Se for string pura ou objeto, trata conforme o retorno do seu utils
+      if (typeof decrypted === "string") {
+        refreshToken = decrypted;
+      } else if (decrypted && !decrypted.error) {
+        refreshToken = decrypted;
+      }
+    }
+  } catch (e) {
+    console.log(
+      "⚠️ Token não estava criptografado ou falha na leitura, usando raw."
+    );
+  }
+  // ----------------------------------------
+
   const oauth2Client = createOAuthClient();
   oauth2Client.setCredentials({
-    refresh_token: res.rows[0].google_refresh_token,
+    refresh_token: refreshToken,
   });
 
+  // Tenta validar/renovar o token
   try {
     const tokenInfo = await oauth2Client.getAccessToken();
     if (!tokenInfo.token) throw new Error("Falha na renovação do token");
@@ -103,6 +105,7 @@ const getAuthenticatedClient = async (whatsappId: string) => {
     throw new Error("AUTH_REQUIRED");
   }
 
+  // CORREÇÃO 2: Retorno explícito do objeto (estava faltando no seu código anterior)
   return {
     client: oauth2Client,
     userId: res.rows[0].user_id,
@@ -126,7 +129,7 @@ export const getAuthUrl = (whatsappId: string) => {
   });
 };
 
-export const getGoogleAuthUrl = (state: string) => { // <--- CORREÇÃO AQUI
+export const getGoogleAuthUrl = (state: string) => {
   const oauth2Client = createOAuthClient();
   return oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -143,14 +146,14 @@ export const getGoogleAuthUrl = (state: string) => { // <--- CORREÇÃO AQUI
 };
 
 export const handleGoogleCallbackForRegistration = async (code: string) => {
-  const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI); // <--- USA A URL DE CADASTRO
-  
+  const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI);
   try {
-      const { tokens } = await oauth2Client.getToken(code);
-      if (!tokens.refresh_token) throw new Error("O Google não forneceu um Refresh Token.");
-      return { refreshToken: tokens.refresh_token };
+    const { tokens } = await oauth2Client.getToken(code);
+    if (!tokens.refresh_token)
+      throw new Error("O Google não forneceu um Refresh Token.");
+    return { refreshToken: tokens.refresh_token };
   } catch (error) {
-      throw error;
+    throw error;
   }
 };
 
@@ -169,6 +172,10 @@ export const handleCallback = async (code: string, whatsappId: string) => {
 
       if (userRes.rows.length === 0) throw new Error("Usuário não encontrado.");
 
+      // --- CRIPTOGRAFIA NA GRAVAÇÃO ---
+      const encryptedToken = encryptData(tokens.refresh_token);
+      // -------------------------------
+
       await pool.query(
         `INSERT INTO user_integrations (user_id, google_refresh_token, google_home_connected, updated_at) 
            VALUES ($1, $2, TRUE, NOW()) 
@@ -177,7 +184,7 @@ export const handleCallback = async (code: string, whatsappId: string) => {
               google_refresh_token = $2, 
               google_home_connected = TRUE,
               updated_at = NOW()`,
-        [userRes.rows[0].id, tokens.refresh_token]
+        [userRes.rows[0].id, encryptedToken]
       );
       return "Integração Google realizada com sucesso! ✅";
     } else {
@@ -241,9 +248,6 @@ export const syncCalendar = async (whatsappId: string): Promise<number> => {
   let operationCount = 0;
 
   try {
-    const isFullSync = !syncToken;
-    // console.log(`🔄 [SYNC] Iniciando sincronização ${isFullSync ? 'COMPLETA' : 'INCREMENTAL'}...`);
-
     do {
       const listParams: any = {
         calendarId: "primary",
@@ -265,7 +269,6 @@ export const syncCalendar = async (whatsappId: string): Promise<number> => {
       const response: any = await calendar.events.list(listParams);
       const items = response.data.items || [];
 
-      // Processa em Paralelo
       const promises = items.map(async (ev: any) => {
         if (ev.status === "cancelled") {
           await removeGoogleEventFromDb(userId, ev.id);
@@ -306,7 +309,7 @@ export const syncCalendar = async (whatsappId: string): Promise<number> => {
   }
 };
 
-export const syncFullCalendar = syncCalendar; // Alias
+export const syncFullCalendar = syncCalendar;
 
 // ============================================================================
 // 📅 FUNÇÕES PÚBLICAS (USAM SYNC + BANCO LOCAL)
@@ -332,12 +335,10 @@ export const listEvents = async (whatsappId: string) => {
   }));
 };
 
-// --- A FUNÇÃO QUE ESTAVA FALTANDO ---
 export const listEventsByDate = async (whatsappId: string, dateIso: string) => {
   await syncCalendar(whatsappId);
   const { userId } = await getAuthenticatedClient(whatsappId);
 
-  // Usa moment para definir o intervalo do dia inteiro no fuso correto
   const startOfDay = moment(dateIso).tz(TIME_ZONE).startOf("day").toISOString();
   const endOfDay = moment(dateIso).tz(TIME_ZONE).endOf("day").toISOString();
 
@@ -403,7 +404,6 @@ export const countEvents = async (
   return parseInt(res.rows[0].count, 10);
 };
 
-// Substitua a função antiga por esta:
 export const createEvent = async (
   whatsappId: string,
   eventDetails: {
@@ -414,22 +414,19 @@ export const createEvent = async (
     attendees?: string[];
     recurrence_freq?: string;
     recurrence_count?: number;
-    timeZone?: string; // <--- NOVO PARÂMETRO
+    timeZone?: string;
   }
 ) => {
   const { client, userId } = await getAuthenticatedClient(whatsappId);
   const calendar = google.calendar({ version: "v3", auth: client });
 
-  // Define o fuso alvo: usa o do usuário ou "America/Sao_Paulo" se não informado
   const targetTimeZone = eventDetails.timeZone || "America/Sao_Paulo";
 
   let requestBody: any = {
     summary: eventDetails.summary,
     description: eventDetails.description,
-    // Passamos o timeZone explicitamente para o Google Calendar
     start: { dateTime: eventDetails.start, timeZone: targetTimeZone },
     end: { dateTime: eventDetails.end, timeZone: targetTimeZone },
-    // Mantém a criação automática do Google Meet
     conferenceData: {
       createRequest: {
         requestId: uuidv4(),
@@ -438,31 +435,27 @@ export const createEvent = async (
     },
   };
 
-  // Configuração de recorrência (se houver)
   if (eventDetails.recurrence_freq) {
     const freq = eventDetails.recurrence_freq.toUpperCase();
     const count = eventDetails.recurrence_count || 365;
     requestBody.recurrence = [`RRULE:FREQ=${freq};COUNT=${count}`];
   }
 
-  // Convidados (se houver)
   if (eventDetails.attendees && eventDetails.attendees.length > 0) {
     requestBody.attendees = eventDetails.attendees.map((email) => ({ email }));
   }
 
-  // Chamada à API do Google
   const event = await calendar.events.insert({
     calendarId: "primary",
-    conferenceDataVersion: 1, 
+    conferenceDataVersion: 1,
     requestBody,
   });
 
-  // Salva no banco local para cache/sync
   await saveGoogleEventToDb(userId, event.data);
 
   return {
     link: event.data.htmlLink,
-    meetLink: event.data.hangoutLink || null, 
+    meetLink: event.data.hangoutLink || null,
   };
 };
 
@@ -500,7 +493,6 @@ export const deleteEvents = async (
     } catch (e: any) {
       if (e.code !== 404 && e.code !== 410) throw e;
     }
-
     await removeGoogleEventFromDb(userId, row.google_event_id);
   });
 
@@ -557,6 +549,7 @@ export const createDoc = async (
     link: `https://docs.google.com/document/d/${docId}`,
   };
 };
+
 export const readDoc = async (waId: string, docId: string) => {
   const { client } = await getAuthenticatedClient(waId);
   const res = await google
@@ -567,6 +560,7 @@ export const readDoc = async (waId: string, docId: string) => {
     content: extractTextFromDoc(res.data.body?.content || []),
   };
 };
+
 export const appendToDoc = async (
   waId: string,
   docId: string,
@@ -592,6 +586,7 @@ export const appendToDoc = async (
   });
   return { message: "Adicionado." };
 };
+
 export const createSheet = async (waId: string, title: string) => {
   const { client } = await getAuthenticatedClient(waId);
   const res = await google
@@ -599,6 +594,7 @@ export const createSheet = async (waId: string, title: string) => {
     .spreadsheets.create({ requestBody: { properties: { title } } });
   return { id: res.data.spreadsheetId, title, link: res.data.spreadsheetUrl };
 };
+
 export const getSheetValues = async (
   waId: string,
   sheetId: string,
@@ -610,6 +606,7 @@ export const getSheetValues = async (
     .spreadsheets.values.get({ spreadsheetId: sheetId, range });
   return { values: res.data.values || [] };
 };
+
 export const appendToSheet = async (
   waId: string,
   sheetId: string,
@@ -626,6 +623,7 @@ export const appendToSheet = async (
     });
   return { message: "Adicionado." };
 };
+
 export const listFiles = async (waId: string, query?: string) => {
   const { client } = await getAuthenticatedClient(waId);
   let q = "trashed = false";
@@ -638,11 +636,13 @@ export const listFiles = async (waId: string, query?: string) => {
   });
   return res.data.files || [];
 };
+
 export const deleteFile = async (waId: string, fileId: string) => {
   const { client } = await getAuthenticatedClient(waId);
   await google.drive({ version: "v3", auth: client }).files.delete({ fileId });
   return { message: "Deletado." };
 };
+
 export const uploadToDrive = async (
   waId: string,
   filePath: string,
@@ -656,6 +656,7 @@ export const uploadToDrive = async (
   });
   return res.data.webViewLink;
 };
+
 export const listEmails = async (waId: string, query: string) => {
   const { client } = await getAuthenticatedClient(waId);
   const gmail = google.gmail({ version: "v1", auth: client });
@@ -682,6 +683,7 @@ export const listEmails = async (waId: string, query: string) => {
     })
   );
 };
+
 export const readEmail = async (waId: string, msgId: string) => {
   const { client } = await getAuthenticatedClient(waId);
   const res = await google
@@ -706,14 +708,14 @@ export const readEmail = async (waId: string, msgId: string) => {
   };
 };
 
-
-export const getWhatsappIdFromUserId = async (userId: string): Promise<string> => {
-  const res = await pool.query(
-      "SELECT phone_number FROM users WHERE id = $1",
-      [userId]
-  );
+export const getWhatsappIdFromUserId = async (
+  userId: string
+): Promise<string> => {
+  const res = await pool.query("SELECT phone_number FROM users WHERE id = $1", [
+    userId,
+  ]);
   if (res.rows.length === 0) {
-      throw new Error("Usuário não encontrado.");
+    throw new Error("Usuário não encontrado.");
   }
   return res.rows[0].phone_number;
 };
