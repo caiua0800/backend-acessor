@@ -23,6 +23,116 @@ const createOAuthClient = (redirectUri?: string) => {
   );
 };
 
+export const searchCalendarEvents = async (
+  userId: string,
+  filters: {
+    page?: number;
+    limit?: number;
+    query?: string;
+    fixedDate?: string; // YYYY-MM-DD
+    startDate?: string; // ISO
+    endDate?: string; // ISO
+  }
+) => {
+  const page = filters.page && filters.page > 0 ? filters.page : 1;
+  const limit = filters.limit && filters.limit > 0 ? filters.limit : 10;
+  const offset = (page - 1) * limit;
+
+  // Construção da Query Dinâmica
+  let sql = `
+    SELECT id, summary, description, start_time, end_time, meet_link 
+    FROM local_calendar_events 
+    WHERE user_id = $1
+  `;
+
+  const params: any[] = [userId];
+  let paramIndex = 2;
+
+  // 1. Filtro por Data Fixa (Prioridade)
+  if (filters.fixedDate) {
+    const startOfDay = moment(filters.fixedDate).startOf("day").toISOString();
+    const endOfDay = moment(filters.fixedDate).endOf("day").toISOString();
+
+    sql += ` AND start_time >= $${paramIndex++} AND start_time <= $${paramIndex++}`;
+    params.push(startOfDay, endOfDay);
+  }
+  // 2. Filtro por Intervalo (Range)
+  else {
+    if (filters.startDate) {
+      sql += ` AND start_time >= $${paramIndex++}`;
+      params.push(filters.startDate);
+    }
+    if (filters.endDate) {
+      sql += ` AND start_time <= $${paramIndex++}`;
+      params.push(filters.endDate);
+    }
+  }
+
+  // 3. Busca por Texto (Título ou Descrição)
+  if (filters.query) {
+    sql += ` AND (
+      unaccent(summary) ILIKE unaccent($${paramIndex}) OR 
+      unaccent(description) ILIKE unaccent($${paramIndex})
+    )`;
+    params.push(`%${filters.query}%`);
+    paramIndex++;
+  }
+
+  // Ordenação e Paginação
+  const countSql = `SELECT COUNT(*) as total FROM (${sql}) as temp`; // Query para contar total
+  sql += ` ORDER BY start_time ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+  params.push(limit, offset);
+
+  // Execução
+  const [dataRes, countRes] = await Promise.all([
+    pool.query(sql, params),
+    pool.query(countSql, params.slice(0, paramIndex - 3)), // Remove limit/offset params para o count
+  ]);
+
+  const total = parseInt(countRes.rows[0].total, 10);
+
+  // Mapeamento para formato amigável
+  const events = dataRes.rows.map((row) => {
+    // Tenta identificar link do meet na descrição se a coluna meet_link for apenas o link do evento
+    // Nota: Baseado no seu código atual, 'meet_link' no banco parece guardar o htmlLink (Link do Evento)
+
+    let meetLink = null;
+    let eventLink = row.meet_link; // Assumindo que o banco salvou o htmlLink aqui
+
+    // Tenta extrair meet da descrição se não estiver explícito
+    if (row.description && row.description.includes("meet.google.com")) {
+      const match = row.description.match(
+        /https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/
+      );
+      if (match) meetLink = match[0];
+    }
+
+    return {
+      id: row.id,
+      summary: row.summary,
+      description: row.description,
+      start: row.start_time,
+      end: row.end_time,
+      eventLink: eventLink,
+      meetLink: meetLink,
+      duration_minutes: moment(row.end_time).diff(
+        moment(row.start_time),
+        "minutes"
+      ),
+    };
+  });
+
+  return {
+    data: events,
+    meta: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+};
+
 export const getGoogleAuthUrlRegistration = (state: string) => {
   const oauth2Client = createOAuthClient(REGISTRATION_REDIRECT_URI);
   return oauth2Client.generateAuthUrl({

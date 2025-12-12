@@ -7,6 +7,7 @@ import {
   listEvents,
   deleteEvent,
   getWhatsappIdFromUserId,
+  searchCalendarEvents,
 } from "../services/googleService";
 
 export const getAuthUrlFallback = async (req: AuthRequest) => {
@@ -89,6 +90,33 @@ export const checkCalendarAvailability = async (
         status: "auth_required",
         authUrl: await getAuthUrlFallback(req),
       });
+    res.status(500).json({ error: e.message });
+  }
+};
+
+export const search = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId!; // Pega do Token JWT
+
+    // Extração dos Query Params
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
+    const query = req.query.q as string | undefined;
+    const fixedDate = req.query.fixedDate as string | undefined;
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
+
+    const result = await searchCalendarEvents(userId, {
+      page,
+      limit,
+      query,
+      fixedDate,
+      startDate,
+      endDate,
+    });
+
+    res.json(result);
+  } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 };

@@ -924,7 +924,56 @@ paths:
       responses:
         '200':
           description: Evento criado e link do Meet retornado.
-  # --- [COLE TODO ESSE BLOCO NO FINAL DO ARQUIVO] ---
+  
+  # --- [NOVA ROTA DE BUSCA COM PAGINAÇÃO] ---
+  /calendar/search:
+    get:
+      tags:
+        - Google (Calendar)
+      summary: Pesquisar eventos na agenda (Filtros e Paginação)
+      description: |
+        Busca eventos sincronizados no banco de dados local com suporte a filtros de data, busca textual e paginação.
+        Retorna links do evento e do Google Meet se disponíveis.
+      parameters:
+        - name: page
+          in: query
+          description: Número da página (padrão 1)
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Itens por página (padrão 10)
+          schema:
+            type: integer
+            default: 10
+        - name: q
+          in: query
+          description: Termo de busca (título ou descrição)
+          schema:
+            type: string
+        - name: fixedDate
+          in: query
+          description: Data específica (YYYY-MM-DD). Prioritário sobre start/end.
+          schema:
+            type: string
+            format: date
+        - name: startDate
+          in: query
+          description: Data inicial do intervalo (ISO)
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          description: Data final do intervalo (ISO)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Resultados da busca paginados.
+
   /calendar/check:
     post:
       tags:
