@@ -82,15 +82,133 @@ export const connect = (req: Request, res: Response) => {
 };
 
 export const callback = async (req: Request, res: Response) => {
+  // Função auxiliar para gerar o HTML bonito
+  const getHtml = (isSuccess: boolean, message: string) => {
+    const color = isSuccess ? '#10b981' : '#ef4444'; // Verde ou Vermelho
+    const icon = isSuccess 
+      ? `<svg viewBox="0 0 24 24" class="icon"><path fill="none" stroke="currentColor" stroke-width="2" d="M20 6L9 17l-5-5"/></svg>` // Check
+      : `<svg viewBox="0 0 24 24" class="icon"><path fill="none" stroke="currentColor" stroke-width="2" d="M18 6L6 18M6 6l12 12"/></svg>`; // X
+
+    return `
+      <!DOCTYPE html>
+      <html lang="pt-br">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>${isSuccess ? 'Sucesso' : 'Erro'}</title>
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f3f4f6;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          }
+          .card {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+            animation: fadeIn 0.5s ease-out forwards;
+          }
+          .icon-container {
+            width: 80px;
+            height: 80px;
+            background-color: ${isSuccess ? '#d1fae5' : '#fee2e2'};
+            color: ${color};
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            animation: popIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+          }
+          .icon {
+            width: 40px;
+            height: 40px;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+          }
+          h1 {
+            color: #111827;
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 12px;
+          }
+          p {
+            color: #6b7280;
+            font-size: 16px;
+            line-height: 1.5;
+            margin: 0 0 24px;
+          }
+          .btn {
+            background-color: ${color};
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            text-decoration: none;
+            display: inline-block;
+          }
+          .btn:hover {
+            opacity: 0.9;
+          }
+          /* Animações */
+          @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          @keyframes popIn {
+            from { transform: scale(0); }
+            to { transform: scale(1); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon-container">
+            ${icon}
+          </div>
+          <h1>${isSuccess ? 'Tudo pronto!' : 'Ops, algo deu errado'}</h1>
+          <p>${message}</p>
+          <button class="btn" onclick="window.close()">Fechar Janela</button>
+        </div>
+        <script>
+          // Tenta fechar automaticamente após 3 segundos (funciona em popups)
+          ${isSuccess ? 'setTimeout(() => { window.close(); }, 3000);' : ''}
+        </script>
+      </body>
+      </html>
+    `;
+  };
+
   try {
     const code = req.query.code as string;
     const waId = req.query.state as string;
-    if (!code || !waId) throw new Error("Parâmetros inválidos");
+
+    if (!code || !waId) {
+       throw new Error("Parâmetros inválidos ou ausentes.");
+    }
+
     await handleCallback(code, waId);
-    res.send("<h1>Sucesso!</h1><p>Pode fechar e voltar para o WhatsApp.</p>");
+
+    // Resposta de Sucesso
+    res.send(getHtml(true, "Integração realizada com sucesso.<br>Esta janela deve fechar automaticamente em instantes."));
+
   } catch (e: any) {
     console.error(e);
-    res.status(500).send(`Erro: ${e.message}`);
+    // Resposta de Erro
+    // Nota: enviando status 200 para mostrar o HTML bonito, se quiser erro HTTP real use res.status(500)
+    res.status(500).send(getHtml(false, `Ocorreu um erro ao processar: ${e.message || 'Erro desconhecido'}`));
   }
 };
 
