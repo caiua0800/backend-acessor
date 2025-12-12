@@ -93,7 +93,7 @@ export const sendTextMessage = async (
         wordCount <= 70 &&
         !askedForText &&
         !isListResponse &&
-        randomNum > 0
+        randomNum > 0.7
       ) {
         shouldSendAudio = true;
       }
