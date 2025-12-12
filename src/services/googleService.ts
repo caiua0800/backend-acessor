@@ -229,8 +229,6 @@ export const getAuthUrl = (whatsappId: string) => {
     prompt: "consent",
     scope: [
       "https://www.googleapis.com/auth/calendar",
-      "https://www.googleapis.com/auth/gmail.readonly",
-      "https://www.googleapis.com/auth/drive",
       "https://www.googleapis.com/auth/documents",
       "https://www.googleapis.com/auth/spreadsheets",
     ],
