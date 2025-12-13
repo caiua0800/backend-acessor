@@ -9,6 +9,8 @@ import { cleanupFiles } from "../services/mediaService";
 import { pool } from "../db";
 import * as orchestrationService from "../services/orchestrationService";
 import * as aiService from "../services/aiService";
+import axios from "axios"; // NOVO: Para o redirecionamento
+import * as userService from "../services/userService"; // NOVO: Para configurações de Dev
 
 const normalizePhoneNumber = (phone: string): string => {
   let cleanPhone = phone.replace(/\D/g, "");
@@ -90,6 +92,98 @@ const processAndRespond = async (waId: string) => {
   }
 };
 
+// NOVO: Função auxiliar para a lógica principal de processamento de mensagem (reutilizável)
+const _handleMessageLogic = async (body: any, waId: string, name: string) => {
+  try {
+    const message = body.entry[0].changes[0].value.messages[0];
+
+    // Atualiza a última interação no servidor onde está rodando
+    await pool.query(
+      "UPDATE users SET last_interaction_at = NOW() WHERE phone_number = $1",
+      [waId]
+    );
+
+    const type = message.type;
+    const messageTimestamp = parseInt(message.timestamp);
+
+    let textContent = "";
+    let filesToCleanup: string[] = [];
+
+    if (type === "text") {
+      textContent = message.text.body;
+    } else if (type === "audio") {
+      const audioPath = await downloadWhatsAppMedia(
+        message.audio.id || message.audio.url
+      );
+      filesToCleanup.push(audioPath);
+      textContent = await transcribeAudio(audioPath);
+    } else if (type === "document") {
+      const mime = message.document.mime_type;
+      const fileName = message.document.filename;
+
+      if (
+        mime.includes("csv") ||
+        mime.includes("text") ||
+        fileName.endsWith(".csv")
+      ) {
+        const docPath = await downloadWhatsAppMedia(
+          message.document.id || message.document.url
+        );
+        filesToCleanup.push(docPath);
+        const fileContent = fs.readFileSync(docPath, "utf-8");
+        textContent = `[ARQUIVO IMPORTADO: ${fileName}]\n${fileContent}`;
+      } else {
+        textContent = `Enviei um arquivo: ${fileName} (Ainda não sei ler este formato)`;
+      }
+    } else if (type === "image") {
+      const imagePath = await downloadWhatsAppMedia(
+        message.image.id || message.image.url
+      );
+      filesToCleanup.push(imagePath);
+      const caption = message.image.caption || "";
+
+      const imageDescription = await aiService.describeImage(
+        imagePath,
+        "Descreva esta imagem detalhadamente para fins financeiros ou organizacionais. Se for uma tabela ou recibo, extraia os dados."
+      );
+
+      textContent = `[IMAGEM ENVIADA: ${caption}]\nCONTEÚDO DA IMAGEM: ${imageDescription}`;
+    }
+
+    if (!textContent) {
+      cleanupFiles(filesToCleanup);
+      return;
+    }
+
+    if (!messageBuffers[waId]) {
+      messageBuffers[waId] = { timer: null, messages: [], userName: name };
+    }
+
+    messageBuffers[waId].messages.push({
+      content: textContent,
+      timestamp: messageTimestamp,
+    });
+
+    if (messageBuffers[waId].timer) {
+      clearTimeout(messageBuffers[waId].timer!);
+    }
+
+    if (filesToCleanup.length > 0) {
+      cleanupFiles(filesToCleanup);
+    }
+
+    messageBuffers[waId].timer = setTimeout(() => {
+      processAndRespond(waId);
+    }, 2000);
+  } catch (error: any) {
+    console.error(
+      "Erro na lógica de processamento de mensagem:",
+      error.message
+    );
+    throw error;
+  }
+};
+
 export const verifyWebhook = (req: Request, res: Response) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -117,92 +211,86 @@ export const processWebhook = async (req: Request, res: Response) => {
       body.entry[0].changes[0].value.messages &&
       body.entry[0].changes[0].value.messages[0]
     ) {
-      const message = body.entry[0].changes[0].value.messages[0];
       const contact = body.entry[0].changes[0].value.contacts[0];
 
       const originalWaId = contact.wa_id;
       const waId = normalizePhoneNumber(originalWaId);
-
-      await pool.query(
-        "UPDATE users SET last_interaction_at = NOW() WHERE phone_number = $1",
-        [waId]
-      );
-
       const name = contact.profile.name;
-      const type = message.type;
-      const messageTimestamp = parseInt(message.timestamp);
 
-      let textContent = "";
-      let filesToCleanup: string[] = [];
-
-      if (type === "text") {
-        textContent = message.text.body;
-      } else if (type === "audio") {
-        const audioPath = await downloadWhatsAppMedia(
-          message.audio.id || message.audio.url
-        );
-        filesToCleanup.push(audioPath);
-        textContent = await transcribeAudio(audioPath);
-      } else if (type === "document") {
-        const mime = message.document.mime_type;
-        const fileName = message.document.filename;
+      // =======================================================
+      // LÓGICA DO MODO DEV (NOVO)
+      // =======================================================
+      try {
+        const devSettings = await userService.getDevSettings();
 
         if (
-          mime.includes("csv") ||
-          mime.includes("text") ||
-          fileName.endsWith(".csv")
+          devSettings.devMode &&
+          devSettings.devPhoneNumber &&
+          devSettings.ngrokUrl
         ) {
-          const docPath = await downloadWhatsAppMedia(
-            message.document.id || message.document.url
+          const normalizedDevNumber = devSettings.devPhoneNumber.replace(
+            /\D/g,
+            ""
           );
-          filesToCleanup.push(docPath);
-          const fileContent = fs.readFileSync(docPath, "utf-8");
-          textContent = `[ARQUIVO IMPORTADO: ${fileName}]\n${fileContent}`;
-        } else {
-          textContent = `Enviei um arquivo: ${fileName} (Ainda não sei ler este formato)`;
+          const normalizedIncomingWaId = waId.replace(/\D/g, "");
+
+          // Se a mensagem vier do número do dev, redireciona para o ngrok
+          if (normalizedIncomingWaId === normalizedDevNumber) {
+            console.log(
+              `⚠️ [DEV MODE] Redirecionando mensagem de ${waId} para ${devSettings.ngrokUrl}/webhook/whatsapp/dev`
+            );
+
+            // Faz um POST com o corpo original da requisição para o endpoint local
+            await axios.post(
+              `${devSettings.ngrokUrl}/webhook/whatsapp/dev`,
+              body,
+              {
+                headers: { "Content-Type": "application/json" },
+              }
+            );
+            return; // Sai sem processar mais nada na Digital Ocean
+          }
         }
-      } else if (type === "image") {
-        const imagePath = await downloadWhatsAppMedia(
-          message.image.id || message.image.url
+      } catch (e) {
+        console.error(
+          "❌ Erro na verificação do Dev Mode, processando localmente:",
+          e
         );
-        filesToCleanup.push(imagePath);
-        const caption = message.image.caption || "";
-
-        const imageDescription = await aiService.describeImage(
-          imagePath,
-          "Descreva esta imagem detalhadamente para fins financeiros ou organizacionais. Se for uma tabela ou recibo, extraia os dados."
-        );
-
-        textContent = `[IMAGEM ENVIADA: ${caption}]\nCONTEÚDO DA IMAGEM: ${imageDescription}`;
+        // Continua o fluxo normal se houver erro nas configs de dev
       }
+      // =======================================================
 
-      if (!textContent) {
-        cleanupFiles(filesToCleanup);
-        return;
-      }
-
-      if (!messageBuffers[waId]) {
-        messageBuffers[waId] = { timer: null, messages: [], userName: name };
-      }
-
-      messageBuffers[waId].messages.push({
-        content: textContent,
-        timestamp: messageTimestamp,
-      });
-
-      if (messageBuffers[waId].timer) {
-        clearTimeout(messageBuffers[waId].timer!);
-      }
-
-      if (filesToCleanup.length > 0) {
-        cleanupFiles(filesToCleanup);
-      }
-
-      messageBuffers[waId].timer = setTimeout(() => {
-        processAndRespond(waId);
-      }, 2000);
+      // Fluxo normal (Processamento na Digital Ocean/Servidor principal)
+      await _handleMessageLogic(body, waId, name);
     }
   } catch (error: any) {
     console.error("Erro no processamento do Webhook:", error.message);
+  }
+};
+
+// NOVO: processWebhookDev (Endpoint local/redirecionado que APENAS processa a mensagem)
+export const processWebhookDev = async (req: Request, res: Response) => {
+  res.sendStatus(200);
+
+  try {
+    const body = req.body;
+
+    if (
+      body.object &&
+      body.entry &&
+      body.entry[0].changes &&
+      body.entry[0].changes[0].value.messages &&
+      body.entry[0].changes[0].value.messages[0]
+    ) {
+      const contact = body.entry[0].changes[0].value.contacts[0];
+      const originalWaId = contact.wa_id;
+      const waId = normalizePhoneNumber(originalWaId);
+      const name = contact.profile.name;
+
+      // Lógica principal (Processamento na máquina local)
+      await _handleMessageLogic(body, waId, name);
+    }
+  } catch (error: any) {
+    console.error("Erro no processamento do Webhook Dev:", error.message);
   }
 };

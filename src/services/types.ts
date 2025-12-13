@@ -12,6 +12,23 @@ export interface UserConfig {
   language: string;
 }
 
+export const getDevSettings = async () => {
+  // Para fins deste requisito, assumimos que as configurações de dev mode estão
+  // em variáveis de ambiente, que devem ser configuradas no servidor da Digital Ocean.
+  // Ex: DEV_MODE=true, DEV_PHONE_NUMBER=5517992562727, NGROK_URL=https://abcde12345.ngrok-free.app
+  
+  // O número deve ser normalizado (apenas dígitos), como é feito no controller.
+  const devPhoneNumber = process.env.DEV_PHONE_NUMBER ? process.env.DEV_PHONE_NUMBER.replace(/\D/g, '') : null;
+  const ngrokUrl = process.env.NGROK_URL || null;
+  const devMode = process.env.DEV_MODE === 'true'; // A variável deve ser 'true' para ativar
+
+  return {
+    devMode,
+    devPhoneNumber,
+    ngrokUrl,
+  };
+};
+
 // O objeto de contexto que passamos para cada especialista
 export interface UserContext {
   waId: string;
